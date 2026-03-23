@@ -1,0 +1,43 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/OpeningCrawl.gd" id="1"]
+
+[node name="OpeningCrawl" type="CanvasLayer"]
+layer = 10
+script = ExtResource("1")
+
+[node name="Background" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.051, 0.051, 0.051, 0.97)
+
+[node name="ContentContainer" type="CenterContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TextBox" type="VBoxContainer" parent="ContentContainer"]
+custom_minimum_size = Vector2(900, 0)
+
+[node name="CrawlLabel" type="RichTextLabel" parent="ContentContainer/TextBox"]
+layout_mode = 2
+bbcode_enabled = true
+fit_content = true
+theme_override_colors/default_color = Color(0.878, 0.835, 0.753, 1)
+theme_override_font_sizes/normal_font_size = 18
+text = "Loading..."
+
+[node name="Spacer" type="Control" parent="ContentContainer/TextBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+
+[node name="DismissButton" type="Button" parent="ContentContainer/TextBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 44)
+size_flags_horizontal = 4
+text = "Begin"

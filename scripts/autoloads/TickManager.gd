@@ -15,6 +15,9 @@ var _pending_log_entries: Array = []
 # Cache stat definitions from library for clamping
 var _stat_defs: Dictionary = {}  # stat_id -> { min_value, max_value }
 
+# Cache personality templates (personality_id -> Array of template strings)
+var _personality_templates: Dictionary = {}
+
 
 func _ready() -> void:
 	set_process(true)
@@ -90,16 +93,8 @@ func _run_tick() -> void:
 		for s in all_stats:
 			_stat_defs[s["id"]] = s
 
-	# Also load daily_health_pressure from apocalypse
-	var apoc_rows := DatabaseManager.query_library(
-		"SELECT daily_health_pressure FROM apocalypses WHERE id = ?;",
-		[game_state["apocalypse_id"]]
-	)
-	var daily_health_pressure: float = 0.0
-	if apoc_rows.size() > 0:
-		daily_health_pressure = float(apoc_rows[0]["daily_health_pressure"])
 	var gs_for_sim := game_state.duplicate()
-	gs_for_sim["daily_health_pressure"] = daily_health_pressure
+	gs_for_sim["daily_health_pressure"] = float(game_state.get("daily_health_pressure", 0.0))
 
 	# --- Step 2: Calculate role bonuses ---
 	var role_bonuses: Dictionary = {}
@@ -174,6 +169,9 @@ func _run_tick() -> void:
 		[living_count]
 	)
 
+	# --- Step 5b: Generate ambient log entries ---
+	_maybe_generate_ambient(game_day, pop_rows, stats)
+
 	# --- Step 6: Update season ---
 	var day_of_year: int = (game_state["starting_day_of_year"] + game_day) % 365
 	var new_season := _get_season(day_of_year)
@@ -220,7 +218,7 @@ func _run_tick() -> void:
 	)
 
 	# --- Step 10: Check loss conditions ---
-	if float(stats.get("population", 0)) <= 5:
+	if float(stats.get("population", 0)) < 3:
 		_trigger_game_over("Population collapse")
 		return
 	if float(stats.get("food", 0)) <= 0:
@@ -245,6 +243,108 @@ func _run_tick() -> void:
 		log_entry_added.emit(entry)
 		if _ui_event_log:
 			_ui_event_log.append_entry(entry)
+
+
+# ---------- Ambient Log Generation ----------
+
+func _maybe_generate_ambient(game_day: int, population: Array, stats: Dictionary) -> void:
+	if population.size() == 0:
+		return
+
+	# ~25% chance per day of an ambient entry
+	if randf() > 0.25:
+		# Also check for stat warnings even on no-ambient days
+		_maybe_generate_stat_warning(game_day, stats)
+		return
+
+	# Cache personality templates
+	if _personality_templates.is_empty():
+		var rows := DatabaseManager.query_library("SELECT id, ambient_templates FROM personalities;")
+		for row in rows:
+			var templates: Array = JSON.parse_string(str(row["ambient_templates"]))
+			if templates != null and templates.size() > 0:
+				_personality_templates[str(row["id"])] = templates
+
+	# Pick a random living person
+	var actor_1: Dictionary = population[randi() % population.size()]
+	var personality_id: String = str(actor_1.get("personality", "caregiver"))
+
+	if not _personality_templates.has(personality_id):
+		return
+
+	var templates: Array = _personality_templates[personality_id]
+	var template: String = templates[randi() % templates.size()]
+
+	# Pick a second actor for {actor_2} if needed
+	var actor_2_name := ""
+	if template.contains("{actor_2}") and population.size() > 1:
+		var actor_2: Dictionary = actor_1
+		var attempts := 0
+		while actor_2["id"] == actor_1["id"] and attempts < 10:
+			actor_2 = population[randi() % population.size()]
+			attempts += 1
+		actor_2_name = str(actor_2["name"])
+
+	var text: String = template.replace("{actor_1}", str(actor_1["name"]))
+	text = text.replace("{actor_2}", actor_2_name)
+
+	_write_log_entry(game_day, 1, "ambient", text)
+
+	# Also try stat warnings less frequently
+	_maybe_generate_stat_warning(game_day, stats)
+
+
+func _maybe_generate_stat_warning(game_day: int, stats: Dictionary) -> void:
+	# ~10% chance per day of a stat-based warning when something is low
+	if randf() > 0.10:
+		return
+
+	var warnings: Array = []
+
+	var food_val: float = float(stats.get("food", 0))
+	var pop_val: float = float(stats.get("population", 1))
+	var food_drain: float = GameData.get_config("FOOD_DRAIN_PER_PERSON")
+	var food_weeks: float = 0.0
+	if pop_val > 0 and food_drain > 0:
+		food_weeks = food_val / (pop_val * food_drain * 7.0)
+	if food_weeks < 2.0:
+		warnings.append("The food stores are getting dangerously thin. People are starting to notice.")
+	elif food_weeks < 4.0:
+		warnings.append("Food is running lower than anyone would like to admit.")
+
+	var health: float = float(stats.get("health", 50))
+	if health < 25:
+		warnings.append("Sickness is spreading. Without proper medicine, it will only get worse.")
+	elif health < 40:
+		warnings.append("Several people are complaining of aches and fevers.")
+
+	var security: float = float(stats.get("security", 50))
+	if security < 25:
+		warnings.append("The perimeter is barely watched. Anything could walk in.")
+	elif security < 40:
+		warnings.append("Strange noises at night. The guards are stretched too thin.")
+
+	var morale: float = float(stats.get("morale", 50))
+	if morale < 25:
+		warnings.append("The mood in camp is bleak. Arguments break out over nothing.")
+	elif morale < 40:
+		warnings.append("People are quieter than usual. The weight of it all is showing.")
+
+	var cohesion: float = float(stats.get("cohesion", 50))
+	if cohesion < 25:
+		warnings.append("Factions are forming. People eat in separate groups now.")
+	elif cohesion < 40:
+		warnings.append("Small disagreements linger longer than they should.")
+
+	var resources: float = float(stats.get("resources", 50))
+	if resources < 25:
+		warnings.append("Tools are breaking faster than they can be repaired. Supplies are critical.")
+	elif resources < 40:
+		warnings.append("The supply shed is looking emptier every day.")
+
+	if warnings.size() > 0:
+		var warning_text: String = warnings[randi() % warnings.size()]
+		_write_log_entry(game_day, 2, "warning", warning_text)
 
 
 # ---------- Helper Methods ----------

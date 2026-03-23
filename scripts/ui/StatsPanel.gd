@@ -10,6 +10,8 @@ const COL_AMBER_WARN := Color("#c8882a")
 const COL_RED_CRIT := Color("#b03030")
 const COL_BAR_BG := Color("#333333")
 
+signal new_game_requested
+
 var _stat_rows: Dictionary = {}  # stat_id -> { bar_fill, value_label, stat_def }
 var _day_season_label: Label
 
@@ -25,6 +27,33 @@ func _ready() -> void:
 	style.content_margin_top = 16.0
 	style.content_margin_bottom = 12.0
 	add_theme_stylebox_override("panel", style)
+
+	# Style the New Game button
+	var btn: Button = $VBoxContainer/NewGameButton
+	btn.flat = true
+	btn.add_theme_font_size_override("font_size", 14)
+	btn.add_theme_color_override("font_color", COL_TEXT_PRIMARY)
+	btn.add_theme_color_override("font_hover_color", COL_TEXT_PRIMARY)
+	btn.add_theme_color_override("font_pressed_color", COL_TEXT_PRIMARY)
+
+	var btn_normal := StyleBoxFlat.new()
+	btn_normal.bg_color = Color("#2a2a2a")
+	btn_normal.content_margin_left = 8.0
+	btn_normal.content_margin_right = 8.0
+	btn_normal.content_margin_top = 6.0
+	btn_normal.content_margin_bottom = 6.0
+	btn.add_theme_stylebox_override("normal", btn_normal)
+
+	var btn_hover := StyleBoxFlat.new()
+	btn_hover.bg_color = Color("#3a3a3a")
+	btn_hover.content_margin_left = 8.0
+	btn_hover.content_margin_right = 8.0
+	btn_hover.content_margin_top = 6.0
+	btn_hover.content_margin_bottom = 6.0
+	btn.add_theme_stylebox_override("hover", btn_hover)
+	btn.add_theme_stylebox_override("pressed", btn_hover)
+
+	btn.pressed.connect(func(): new_game_requested.emit())
 
 
 func build(stat_definitions: Array) -> void:

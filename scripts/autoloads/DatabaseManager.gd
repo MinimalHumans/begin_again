@@ -35,6 +35,17 @@ func open_save(path: String) -> bool:
 	return true
 
 
+func reset_save(path: String) -> void:
+	if _save_db:
+		_save_db.close_db()
+		_save_db = null
+	# Delete the existing file
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	# Re-open and recreate schema
+	open_save(path)
+
+
 func close_all() -> void:
 	if _library_db:
 		_library_db.close_db()
@@ -232,7 +243,8 @@ func _create_save_schema() -> void:
 		opening_text           TEXT NOT NULL,
 		game_over              INTEGER DEFAULT 0,
 		game_over_reason       TEXT,
-		game_over_text         TEXT
+		game_over_text         TEXT,
+		daily_health_pressure  REAL DEFAULT 0.0
 	);")
 
 	_save_db.query("CREATE TABLE IF NOT EXISTS world_tags (
