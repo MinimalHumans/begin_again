@@ -18,11 +18,20 @@ func _ready() -> void:
 
 	event_log.load_from_db()
 
-	time_controls.speed_changed.connect(_on_speed_changed)
+	# Register UI with TickManager
+	TickManager.register_ui(event_log, stats_panel)
+
+	# Connect TimeControls speed signal to TickManager
+	time_controls.speed_changed.connect(
+		func(speed: int): TickManager.set_speed(speed)
+	)
+
+	# Connect TickManager signals
+	TickManager.day_advanced.connect(_on_day_advanced)
 
 
-func _on_speed_changed(speed: int) -> void:
-	print("Speed changed to: ", speed)
+func _on_day_advanced(_new_day: int, _new_season: String) -> void:
+	pass
 
 
 func _seed_test_data() -> void:

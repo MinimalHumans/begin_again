@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.5")
 
 DatabaseManager="*res://scripts/autoloads/DatabaseManager.gd"
 GameData="*res://scripts/autoloads/GameData.gd"
+TickManager="*res://scripts/autoloads/TickManager.gd"
 
 [display]
 
