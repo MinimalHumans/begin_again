@@ -1,0 +1,60 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/ui/StatsPanel.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/ui/EventLog.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/ui/TimeControls.tscn" id="4"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.102, 0.102, 0.102, 1)
+
+[node name="Layout" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="StatsPanel" parent="Layout" instance=ExtResource("2")]
+layout_mode = 2
+custom_minimum_size = Vector2(280, 0)
+size_flags_horizontal = 0
+size_flags_vertical = 3
+
+[node name="Divider" type="ColorRect" parent="Layout"]
+layout_mode = 2
+custom_minimum_size = Vector2(1, 0)
+size_flags_vertical = 3
+color = Color(0.2, 0.2, 0.2, 1)
+
+[node name="RightArea" type="VBoxContainer" parent="Layout"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+
+[node name="EventLog" parent="Layout/RightArea" instance=ExtResource("3")]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="TimeControls" parent="Layout/RightArea" instance=ExtResource("4")]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 60)
