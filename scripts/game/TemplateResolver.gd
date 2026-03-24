@@ -88,8 +88,15 @@ static func resolve_event(
 	if result.contains("{game_day}"):
 		result = result.replace("{game_day}", str(game_state.get("game_day", 0)))
 
+	# {outcome_label}
+	if result.contains("{outcome_label}"):
+		var label: String = str(chain_memory.get("_outcome_label", ""))
+		result = result.replace("{outcome_label}", label)
+
 	# Chain memory tokens
 	for key in chain_memory:
+		if str(key).begins_with("_"):
+			continue
 		result = result.replace("{" + str(key) + "}", str(chain_memory[key]))
 
 	# --- Pass 4: Base resolve for any remaining simple tokens ---
