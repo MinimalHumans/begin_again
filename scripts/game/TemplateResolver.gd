@@ -67,6 +67,12 @@ static func resolve_event(
 			band = "adequate"
 		result = result.replace("{stat.food}", band)
 
+	# --- Pass 2b: Chain memory variables {memory.key} ---
+	for key in chain_memory:
+		if str(key).begins_with("_"):
+			continue
+		result = result.replace("{memory." + str(key) + "}", str(chain_memory[key]))
+
 	# --- Pass 3: Location, game state, chain_memory ---
 	# {building}
 	if result.contains("{building}"):

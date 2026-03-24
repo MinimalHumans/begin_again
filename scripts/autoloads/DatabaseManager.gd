@@ -24,6 +24,9 @@ func open_library() -> bool:
 		_library_db.query("SELECT COUNT(*) AS cnt FROM events WHERE tier = 2;")
 		if _library_db.query_result.size() == 0 or int(_library_db.query_result[0].get("cnt", 0)) < 20:
 			_seed_tier2_events()
+		_library_db.query("SELECT COUNT(*) AS cnt FROM events WHERE chain_id IS NOT NULL;")
+		if _library_db.query_result.size() == 0 or int(_library_db.query_result[0].get("cnt", 0)) < 15:
+			_seed_chain_events()
 
 	return true
 
@@ -226,6 +229,7 @@ func _create_library_schema() -> void:
 		chain_id             TEXT,
 		chain_stage          INTEGER,
 		chain_memory_schema  TEXT,
+		chain_auto_next      TEXT DEFAULT NULL,
 		cooldown_days        INTEGER DEFAULT 0,
 		exclusion_group      TEXT,
 		max_occurrences      INTEGER,
@@ -328,12 +332,12 @@ func _create_save_schema() -> void:
 	);")
 
 	_save_db.query("CREATE TABLE IF NOT EXISTS active_chains (
-		chain_id       TEXT PRIMARY KEY,
-		current_stage  INTEGER NOT NULL,
-		memory         TEXT NOT NULL,
-		started_day    INTEGER NOT NULL,
-		last_stage_day INTEGER NOT NULL,
-		next_fire_day  INTEGER
+		chain_id        TEXT PRIMARY KEY,
+		current_stage_id TEXT NOT NULL,
+		memory          TEXT NOT NULL,
+		started_day     INTEGER NOT NULL,
+		last_stage_day  INTEGER NOT NULL,
+		next_fire_day   INTEGER
 	);")
 
 	_save_db.query("CREATE TABLE IF NOT EXISTS flags (
@@ -369,6 +373,7 @@ func _seed_library_data() -> void:
 	_seed_community_types()
 	_seed_tier1_events()
 	_seed_tier2_events()
+	_seed_chain_events()
 
 
 func _seed_stats() -> void:
@@ -783,4 +788,259 @@ func _insert_tier2_event(id: String, title: String, category: String, eligibilit
 	_library_db.query_with_bindings(
 		"INSERT INTO events (id, tier, category, title, eligibility, description_template, actor_requirements, choices, chain_id, chain_stage, chain_memory_schema, cooldown_days, exclusion_group, max_occurrences, content_tags, seasonal_tags, weight) VALUES (?, 2, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, NULL, NULL, ?);",
 		[id, category, title, eligibility, desc_template, actor_req, choices_json, cooldown_days, exclusion_group, max_occurrences, weight]
+	)
+
+
+func _insert_chain_event(id: String, title: String, category: String, chain_id: String, chain_stage: int, chain_memory_schema: String, desc_template: String, actor_req, choices_json, chain_auto_next) -> void:
+	_library_db.query_with_bindings(
+		"INSERT INTO events (id, tier, category, title, eligibility, description_template, actor_requirements, choices, chain_id, chain_stage, chain_memory_schema, chain_auto_next, cooldown_days, exclusion_group, max_occurrences, content_tags, seasonal_tags, weight) VALUES (?, 2, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, 0, NULL, 1, NULL, NULL, 1.0);",
+		[id, category, title, desc_template, actor_req, choices_json, chain_id, chain_stage, chain_memory_schema, chain_auto_next]
+	)
+
+
+func _seed_chain_events() -> void:
+	_library_db.query("SELECT COUNT(*) AS cnt FROM events WHERE chain_id IS NOT NULL;")
+	if _library_db.query_result.size() > 0 and int(_library_db.query_result[0].get("cnt", 0)) >= 15:
+		return
+
+	var a1 := '{"actor_1":{"required_skills":[],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+
+	# ========== Chain 1: The Refugees (chain_refugees) ==========
+
+	# Stage 1
+	_insert_chain_event(
+		"chain_refugees_1", "Refugees at the Gate", "external",
+		"chain_refugees", 1,
+		'{"reads":[],"writes":["leader_name","group_size","accepted"]}',
+		'A group of refugees — twelve of them — has arrived at the settlement edge. Their leader, {actor_1}, speaks for them. They look hungry, frightened, and determined.',
+		a1,
+		'[{"id":"a","text_template":"Let them in on a trial basis. They earn their place.","immediate_effects":{"food":-15,"morale":3},"community_scores":{"commonwealth":2,"exchange":1},"roll":{"relevant_stats":[{"stat":"resources","weight":0.8},{"stat":"cohesion","weight":0.6}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The trial is off to a rough start. Resources are tighter than expected.","effects":{"resources":-8,"cohesion":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_2_tense","chain_memory_write":{"accepted":true,"group_size":12,"leader_name":"{actor_1}","mood":"tense"}},"mixed":{"text":"The refugees are in. It is an adjustment.","effects":{"cohesion":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_2_settled","chain_memory_write":{"accepted":true,"group_size":12,"leader_name":"{actor_1}","mood":"neutral"}},"good":{"text":"{actor_1} proved an excellent liaison. Integration is smoother than expected.","effects":{"morale":4,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_2_settled","chain_memory_write":{"accepted":true,"group_size":12,"leader_name":"{actor_1}","mood":"positive"}}}},{"id":"b","text_template":"The community cannot absorb twelve more people right now.","immediate_effects":{"morale":-5},"community_scores":{"bastion":2,"throne":1,"commonwealth":-3},"roll":{"relevant_stats":[{"stat":"stability","weight":0.6}],"base_value":0.4,"context_bonuses":[]},"outcomes":{"bad":{"text":"The community fractured over the decision. Half wanted to help.","effects":{"cohesion":-8,"morale":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_2_aftermath","chain_memory_write":{"accepted":false,"group_size":12,"leader_name":"{actor_1}","mood":"divided"}},"mixed":{"text":"A hard call. The community accepted it without enthusiasm.","effects":{"morale":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"good":{"text":"The decision was accepted. Leadership held.","effects":{"stability":3},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}}}}]',
+		null
+	)
+
+	# Stage 2a — Settled
+	_insert_chain_event(
+		"chain_refugees_2_settled", "The Refugees Settle In", "external",
+		"chain_refugees", 2,
+		'{"reads":["leader_name","group_size","mood"],"writes":["integrated"]}',
+		'The refugees — {memory.group_size} of them — have been with the community for two weeks now. {memory.leader_name} has been helpful, but tensions are emerging over work assignments.',
+		null,
+		'[{"id":"a","text_template":"Create a shared work rota.","immediate_effects":{},"community_scores":{"commonwealth":3},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8},{"stat":"cohesion","weight":0.6}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The rota created more arguments than it solved.","effects":{"cohesion":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"mixed":{"text":"The rota works, barely.","effects":{"stability":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_good","chain_memory_write":{"integrated":true}},"good":{"text":"{memory.leader_name} took ownership of the rota. Real cooperation is developing.","effects":{"cohesion":5,"morale":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_good","chain_memory_write":{"integrated":true}}}},{"id":"b","text_template":"Let {memory.leader_name} manage their own people.","immediate_effects":{},"community_scores":{"kindred":2,"exchange":1},"roll":{"relevant_stats":[{"stat":"cohesion","weight":0.8}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"Two separate communities formed. Cooperation is minimal.","effects":{"cohesion":-6},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"mixed":{"text":"Parallel tracks. Peaceful but separate.","effects":{"cohesion":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"good":{"text":"{memory.leader_name} group proved self-sufficient and complementary.","effects":{"stability":4,"resources":6},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_good","chain_memory_write":{"integrated":true}}}}]',
+		null
+	)
+
+	# Stage 2b — Tense
+	_insert_chain_event(
+		"chain_refugees_2_tense", "Tensions with the Refugees", "external",
+		"chain_refugees", 2,
+		'{"reads":["leader_name","group_size"],"writes":["integrated"]}',
+		'The provisional arrangement with the refugees is fraying. {memory.leader_name} came to you privately — their people feel unwelcome.',
+		null,
+		'[{"id":"a","text_template":"Hold a community meeting to air grievances.","immediate_effects":{},"community_scores":{"commonwealth":3},"roll":{"relevant_stats":[{"stat":"cohesion","weight":0.8},{"stat":"morale","weight":0.5}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The meeting became an argument. Fault lines are visible.","effects":{"cohesion":-7,"morale":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"mixed":{"text":"Voices were heard. Nothing resolved but pressure released.","effects":{"cohesion":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"good":{"text":"Honest conversation cleared the air. {memory.leader_name} was grateful for the chance to speak.","effects":{"cohesion":4,"morale":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_good","chain_memory_write":{"integrated":true}}}},{"id":"b","text_template":"Ask the refugees to leave if they are unhappy.","immediate_effects":{},"community_scores":{"throne":2,"bastion":1,"commonwealth":-2},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"Half the refugees left. The others stayed, resentful. Your own people are divided over the handling.","effects":{"cohesion":-8,"morale":-6},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"mixed":{"text":"The ultimatum landed badly but they stayed.","effects":{"morale":-4,"stability":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}},"good":{"text":"The bluntness paradoxically cleared the air. {memory.leader_name} respected the honesty.","effects":{"stability":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_refugees_3_end_bad","chain_memory_write":{"integrated":false}}}}]',
+		null
+	)
+
+	# Stage 2c — Aftermath (turned away, bad outcome)
+	_insert_chain_event(
+		"chain_refugees_2_aftermath", "Aftermath of the Refusal", "external",
+		"chain_refugees", 2,
+		'{"reads":["leader_name"],"writes":[]}',
+		'Three weeks after the community turned away {memory.leader_name} group, a messenger arrived. They found shelter — but {memory.leader_name} wants to talk.',
+		null,
+		'[{"id":"a","text_template":"Meet with them.","immediate_effects":{},"community_scores":{"exchange":2},"roll":{"relevant_stats":[{"stat":"reputation","weight":0.8}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The meeting went badly. The refugees have allied with another group nearby.","effects":{"reputation":-6,"security":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"mixed":{"text":"An awkward exchange. No harm done, no bridge built.","effects":{"reputation":2},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"good":{"text":"A surprising outcome — {memory.leader_name} offered a trade arrangement.","effects":{"reputation":8,"resources":10},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}}}},{"id":"b","text_template":"Decline the meeting.","immediate_effects":{"reputation":-5},"community_scores":{"bastion":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.3}],"base_value":0.1,"context_bonuses":[]},"outcomes":{"bad":{"text":"Word spread. The community reputation for cruelty is growing.","effects":{"reputation":-8},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"mixed":{"text":"The messenger left. The matter is closed.","effects":{},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}},"good":{"text":"The messenger left. The matter is closed.","effects":{},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{}}}}]',
+		null
+	)
+
+	# Stage 3a — Integrated well (no-choice resolution)
+	_insert_chain_event(
+		"chain_refugees_3_end_good", "The Refugees — Resolution", "external",
+		"chain_refugees", 3,
+		'{"reads":["leader_name","group_size"],"writes":[]}',
+		'The {memory.group_size} who came with {memory.leader_name} are woven into the community now. Some of them are among the most reliable people here.',
+		null, null, null
+	)
+
+	# Stage 3b — Integrated poorly (no-choice resolution)
+	_insert_chain_event(
+		"chain_refugees_3_end_bad", "The Refugees — Resolution", "external",
+		"chain_refugees", 3,
+		'{"reads":["leader_name","group_size"],"writes":[]}',
+		'The {memory.group_size} who came with {memory.leader_name} are still here. Nobody would call them community. They coexist. It is not the same thing.',
+		null, null, null
+	)
+
+	# ========== Chain 2: The Illness (chain_illness) ==========
+
+	# Stage 1
+	_insert_chain_event(
+		"chain_illness_1", "Something Going Around", "health",
+		"chain_illness", 1,
+		'{"reads":[],"writes":["source","sick_count","quarantine_held"]}',
+		'Several people reported feeling unwell this morning. Headaches, fever, fatigue. {actor_1} was the first to show symptoms. Nobody knows the source yet.',
+		a1,
+		'[{"id":"a","text_template":"Quarantine the sick immediately. Isolate and contain.","immediate_effects":{"morale":-3},"community_scores":{"archive":2,"bastion":1},"roll":{"relevant_stats":[{"stat":"health","weight":1.0},{"stat":"knowledge","weight":0.5}],"base_value":0.2,"context_bonuses":[{"condition":"stat_above:health:50","bonus":0.3}]},"outcomes":{"bad":{"text":"The quarantine was too late. Three more fell ill before containment held.","effects":{"health":-6,"morale":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_2_quarantine","chain_memory_write":{"source":"unknown contamination","sick_count":6,"quarantine_held":false}},"mixed":{"text":"The quarantine contained the worst of it. People are nervous but following protocol.","effects":{"health":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_2_quarantine","chain_memory_write":{"source":"unknown contamination","sick_count":3,"quarantine_held":true}},"good":{"text":"Swift action. The sick are isolated and the source is being traced.","effects":{"stability":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_2_quarantine","chain_memory_write":{"source":"contaminated water","sick_count":2,"quarantine_held":true}}}},{"id":"b","text_template":"Treat openly. Share resources and keep people calm.","immediate_effects":{"resources":-8,"morale":2},"community_scores":{"congregation":2,"commonwealth":1},"roll":{"relevant_stats":[{"stat":"health","weight":0.8},{"stat":"resources","weight":0.4}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The illness spread rapidly through the open camp. Half the community is showing symptoms.","effects":{"health":-10,"morale":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_2_spread","chain_memory_write":{"source":"unknown contamination","sick_count":10,"quarantine_held":false}},"mixed":{"text":"Some spread was inevitable but people appreciated the transparency.","effects":{"health":-5,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_2_spread","chain_memory_write":{"source":"unknown contamination","sick_count":5,"quarantine_held":false}},"good":{"text":"Open treatment and good care kept it contained. Trust in leadership grew.","effects":{"morale":4,"cohesion":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"source":"mild infection","sick_count":2,"quarantine_held":false}}}}]',
+		null
+	)
+
+	# Stage 2a — Quarantine
+	_insert_chain_event(
+		"chain_illness_2_quarantine", "The Quarantine Holds", "health",
+		"chain_illness", 2,
+		'{"reads":["source","sick_count","quarantine_held"],"writes":["quarantine_held"]}',
+		'Day five of the quarantine. {memory.sick_count} people are isolated. Supplies are being rationed to the sick. The healthy are restless.',
+		null,
+		'[{"id":"a","text_template":"Maintain the quarantine. Stay the course.","immediate_effects":{"resources":-5},"community_scores":{"archive":2},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8},{"stat":"health","weight":0.6}],"base_value":0.3,"context_bonuses":[{"condition":"stat_above:health:40","bonus":0.2}]},"outcomes":{"bad":{"text":"The quarantine broke down. Someone snuck out. Now everyone is exposed.","effects":{"health":-8,"stability":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"mixed":{"text":"The quarantine held but morale is fraying. People want normalcy.","effects":{"morale":-4,"health":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":true}},"good":{"text":"The quarantine worked. New cases stopped appearing. The illness is burning itself out.","effects":{"health":6,"stability":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":true}}}},{"id":"b","text_template":"End the quarantine early. People need to work.","immediate_effects":{"morale":3},"community_scores":{"commonwealth":1,"congregation":1},"roll":{"relevant_stats":[{"stat":"health","weight":1.0}],"base_value":0.1,"context_bonuses":[]},"outcomes":{"bad":{"text":"The illness roared back. More people sick than before.","effects":{"health":-10,"morale":-6},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"mixed":{"text":"Some spread, but the worst had already passed.","effects":{"health":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"good":{"text":"Timing was right. The sick were already recovering. Life resumed.","effects":{"morale":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":true}}}}]',
+		null
+	)
+
+	# Stage 2b — Spread
+	_insert_chain_event(
+		"chain_illness_2_spread", "The Illness Spreads", "health",
+		"chain_illness", 2,
+		'{"reads":["source","sick_count"],"writes":["quarantine_held"]}',
+		'The illness has spread. {memory.sick_count} people are now symptomatic. Productivity has collapsed. Desperate measures are being discussed.',
+		null,
+		'[{"id":"a","text_template":"Burn through the medical supplies. Treat aggressively.","immediate_effects":{"resources":-15},"community_scores":{"congregation":2},"roll":{"relevant_stats":[{"stat":"health","weight":1.0},{"stat":"knowledge","weight":0.5}],"base_value":0.2,"context_bonuses":[{"condition":"actor_has_skill:medicine","bonus":0.3}]},"outcomes":{"bad":{"text":"The supplies are gone and people are still sick. A dire situation.","effects":{"health":-6,"resources":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"mixed":{"text":"The aggressive treatment helped some. Others are still fighting it.","effects":{"health":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"good":{"text":"The treatment worked. Recovery is rapid. The worst is over.","effects":{"health":8,"morale":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}}}},{"id":"b","text_template":"Late quarantine. Lock it down now.","immediate_effects":{"morale":-5},"community_scores":{"archive":2,"bastion":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8}],"base_value":0.1,"context_bonuses":[]},"outcomes":{"bad":{"text":"Too late. The quarantine is a formality. Everyone has been exposed.","effects":{"health":-8,"cohesion":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":false}},"mixed":{"text":"The late quarantine slowed things. Not ideal but better than nothing.","effects":{"health":-3,"stability":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":true}},"good":{"text":"Against the odds, the quarantine worked. The illness peaked and began to fade.","effects":{"health":4,"stability":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_illness_3_end","chain_memory_write":{"quarantine_held":true}}}}]',
+		null
+	)
+
+	# Stage 3 — Resolution (no-choice)
+	_insert_chain_event(
+		"chain_illness_3_end", "The Illness Passes", "health",
+		"chain_illness", 3,
+		'{"reads":["source","sick_count","quarantine_held"],"writes":[]}',
+		'The illness has run its course. The community survived, though not without cost. The source was traced to {memory.source}. People will remember how it was handled.',
+		null, null, null
+	)
+
+	# ========== Chain 3: The Deserter (chain_deserter) ==========
+
+	# Stage 1
+	_insert_chain_event(
+		"chain_deserter_1", "Signs of Desertion", "interpersonal",
+		"chain_deserter", 1,
+		'{"reads":[],"writes":["deserter_name","reason","confronted"]}',
+		'Someone found a hidden pack near the perimeter — supplies, a water bottle, a rough map. It belongs to {actor_1}. They are planning to leave.',
+		a1,
+		'[{"id":"a","text_template":"Confront {actor_1} directly.","immediate_effects":{},"community_scores":{"throne":2,"bastion":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8},{"stat":"cohesion","weight":0.5}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"{actor_1} denied everything, then became hostile. The confrontation turned ugly.","effects":{"cohesion":-5,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_confronted","chain_memory_write":{"deserter_name":"{actor_1}","reason":"felt trapped","confronted":true}},"mixed":{"text":"{actor_1} admitted it. They said they felt trapped. No resolution yet.","effects":{"cohesion":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_confronted","chain_memory_write":{"deserter_name":"{actor_1}","reason":"felt unvalued","confronted":true}},"good":{"text":"{actor_1} broke down. They were afraid, not disloyal. The conversation helped.","effects":{"morale":2,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_confronted","chain_memory_write":{"deserter_name":"{actor_1}","reason":"was afraid","confronted":true}}}},{"id":"b","text_template":"Watch {actor_1} quietly. Do not tip them off.","immediate_effects":{},"community_scores":{"archive":2,"exchange":1},"roll":{"relevant_stats":[{"stat":"knowledge","weight":0.6},{"stat":"security","weight":0.5}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"{actor_1} noticed the surveillance and panicked. They tried to leave that night.","effects":{"security":-3,"morale":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_watched","chain_memory_write":{"deserter_name":"{actor_1}","reason":"felt watched","confronted":false}},"mixed":{"text":"The watch revealed nothing new. {actor_1} continues their routine, but the pack is still there.","effects":{},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_watched","chain_memory_write":{"deserter_name":"{actor_1}","reason":"unknown","confronted":false}},"good":{"text":"Watching {actor_1} revealed they had been meeting someone outside the perimeter. Intelligence gained.","effects":{"security":3,"knowledge":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_2_watched","chain_memory_write":{"deserter_name":"{actor_1}","reason":"outside contact","confronted":false}}}}]',
+		null
+	)
+
+	# Stage 2a — Confronted
+	_insert_chain_event(
+		"chain_deserter_2_confronted", "The Confrontation", "interpersonal",
+		"chain_deserter", 2,
+		'{"reads":["deserter_name","reason"],"writes":[]}',
+		'{memory.deserter_name} knows you know. The community is watching. They said they {memory.reason}. What happens next defines something about this place.',
+		null,
+		'[{"id":"a","text_template":"Give {memory.deserter_name} a reason to stay. Address their grievance.","immediate_effects":{},"community_scores":{"commonwealth":3,"kindred":1},"roll":{"relevant_stats":[{"stat":"morale","weight":0.8},{"stat":"cohesion","weight":0.6}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"{memory.deserter_name} listened but their mind was made up. They left the next morning.","effects":{"morale":-5,"cohesion":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}},"mixed":{"text":"{memory.deserter_name} agreed to stay, for now. The underlying tension remains.","effects":{"morale":-1},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}},"good":{"text":"{memory.deserter_name} was moved by the effort. Something shifted. They recommitted.","effects":{"morale":4,"cohesion":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}}}},{"id":"b","text_template":"Let them go. No one is a prisoner here.","immediate_effects":{"morale":-2},"community_scores":{"commonwealth":2,"rewilded":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.6}],"base_value":0.4,"context_bonuses":[]},"outcomes":{"bad":{"text":"{memory.deserter_name} left and took supplies. Others are wondering if they should do the same.","effects":{"morale":-6,"stability":-4,"resources":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}},"mixed":{"text":"{memory.deserter_name} left quietly. A loss, but a clean one.","effects":{"morale":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}},"good":{"text":"{memory.deserter_name} left with dignity. The community respected the handling. Strangely, it strengthened resolve.","effects":{"stability":3,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}}}}]',
+		null
+	)
+
+	# Stage 2b — Watched
+	_insert_chain_event(
+		"chain_deserter_2_watched", "Watching and Waiting", "interpersonal",
+		"chain_deserter", 2,
+		'{"reads":["deserter_name","reason"],"writes":[]}',
+		'The watch on {memory.deserter_name} continues. They {memory.reason}. The situation cannot hold indefinitely.',
+		null,
+		'[{"id":"a","text_template":"Approach {memory.deserter_name} now, with what you know.","immediate_effects":{},"community_scores":{"throne":2},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8},{"stat":"morale","weight":0.4}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The delayed confrontation felt like surveillance. {memory.deserter_name} was furious and left immediately.","effects":{"cohesion":-6,"morale":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}},"mixed":{"text":"{memory.deserter_name} was shaken but agreed to talk. An uneasy truce.","effects":{"cohesion":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}},"good":{"text":"The intelligence gathered made the conversation productive. {memory.deserter_name} felt heard.","effects":{"stability":3,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}}}},{"id":"b","text_template":"Do nothing. Let events take their course.","immediate_effects":{},"community_scores":{"rewilded":2},"roll":{"relevant_stats":[{"stat":"cohesion","weight":0.5}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"{memory.deserter_name} vanished in the night. Took more than their share.","effects":{"morale":-5,"resources":-6},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":false}},"mixed":{"text":"{memory.deserter_name} stayed, but the distance between them and the community grew.","effects":{"cohesion":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}},"good":{"text":"{memory.deserter_name} unpacked the hidden bag themselves. Whatever passed, it passed.","effects":{"morale":3,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_deserter_3_end","chain_memory_write":{"stayed":true}}}}]',
+		null
+	)
+
+	# Stage 3 — Resolution (no-choice)
+	_insert_chain_event(
+		"chain_deserter_3_end", "The Deserter — Resolution", "interpersonal",
+		"chain_deserter", 3,
+		'{"reads":["deserter_name","stayed"],"writes":[]}',
+		'The matter of {memory.deserter_name} has settled. The community moved on, as it must.',
+		null, null, null
+	)
+
+	# ========== Chain 4: The Rival Group (chain_rivals) ==========
+
+	# Stage 1
+	_insert_chain_event(
+		"chain_rivals_1", "Signs of Others", "external",
+		"chain_rivals", 1,
+		'{"reads":[],"writes":["rival_name","approach","threat_level"]}',
+		'{actor_1} found tracks near the foraging grounds — fresh, deliberate. Supply caches have been disturbed. Someone else is operating in the area.',
+		a1,
+		'[{"id":"a","text_template":"Investigate carefully. Map their movements.","immediate_effects":{},"community_scores":{"archive":2,"exchange":1},"roll":{"relevant_stats":[{"stat":"security","weight":0.8},{"stat":"knowledge","weight":0.5}],"base_value":0.3,"context_bonuses":[{"condition":"actor_has_skill:combat","bonus":0.2}]},"outcomes":{"bad":{"text":"The investigation was spotted. Whoever is out there knows you are aware of them now.","effects":{"security":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the eastern group","approach":"cautious","threat_level":"medium"}},"mixed":{"text":"A clear picture is forming. A small group, maybe eight people, operating east of here.","effects":{"knowledge":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the eastern group","approach":"cautious","threat_level":"low"}},"good":{"text":"Thorough reconnaissance. You know their camp location, their numbers, their patterns.","effects":{"security":4,"knowledge":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the eastern group","approach":"cautious","threat_level":"low"}}}},{"id":"b","text_template":"Mark the territory. Make it clear this area is claimed.","immediate_effects":{},"community_scores":{"bastion":3,"throne":1},"roll":{"relevant_stats":[{"stat":"security","weight":1.0}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The territorial markers were torn down overnight. A message.","effects":{"security":-5,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the hostile group","approach":"aggressive","threat_level":"high"}},"mixed":{"text":"The markers stand. No response yet. Tension hangs in the air.","effects":{"security":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the nearby group","approach":"aggressive","threat_level":"medium"}},"good":{"text":"The markers worked. Activity near your territory dropped immediately.","effects":{"security":5,"stability":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_2","chain_memory_write":{"rival_name":"the nearby group","approach":"aggressive","threat_level":"low"}}}}]',
+		null
+	)
+
+	# Stage 2
+	_insert_chain_event(
+		"chain_rivals_2", "Contact with the Rivals", "external",
+		"chain_rivals", 2,
+		'{"reads":["rival_name","approach","threat_level"],"writes":["approach"]}',
+		'Confirmed: {memory.rival_name} is real. A small settlement, surviving much as you are. Threat level seems {memory.threat_level}. Direct contact is now possible.',
+		null,
+		'[{"id":"a","text_template":"Send an envoy to negotiate.","immediate_effects":{},"community_scores":{"exchange":3,"commonwealth":1},"roll":{"relevant_stats":[{"stat":"reputation","weight":0.8},{"stat":"knowledge","weight":0.4}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The envoy was turned away. {memory.rival_name} is not interested in talk.","effects":{"reputation":-3,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_3_conflict","chain_memory_write":{"approach":"diplomatic"}},"mixed":{"text":"A cautious exchange. Neither side trusts the other but communication is open.","effects":{"reputation":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_3_peace","chain_memory_write":{"approach":"diplomatic"}},"good":{"text":"The envoy was well received. {memory.rival_name} is open to trade talks.","effects":{"reputation":5,"morale":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_3_peace","chain_memory_write":{"approach":"diplomatic"}}}},{"id":"b","text_template":"Send a warning. Stay out of our territory.","immediate_effects":{},"community_scores":{"bastion":3,"throne":1},"roll":{"relevant_stats":[{"stat":"security","weight":1.0}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The warning was met with a counter-warning. Escalation is real.","effects":{"security":-4,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_3_conflict","chain_memory_write":{"approach":"hostile"}},"mixed":{"text":"The warning was received. An uneasy standoff.","effects":{"security":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_3_conflict","chain_memory_write":{"approach":"hostile"}},"good":{"text":"The warning was respected. {memory.rival_name} pulled back from the disputed area.","effects":{"security":5,"stability":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"approach":"hostile"}}}}]',
+		null
+	)
+
+	# Stage 3a — Peace
+	_insert_chain_event(
+		"chain_rivals_3_peace", "Negotiations with the Rivals", "external",
+		"chain_rivals", 3,
+		'{"reads":["rival_name"],"writes":[]}',
+		'A meeting has been arranged with {memory.rival_name}. Neutral ground. Both sides armed but talking.',
+		null,
+		'[{"id":"a","text_template":"Propose a trade arrangement. Mutual benefit.","immediate_effects":{},"community_scores":{"exchange":3,"commonwealth":2},"roll":{"relevant_stats":[{"stat":"reputation","weight":0.8},{"stat":"resources","weight":0.5}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The trade terms fell apart. Cultural differences run deep. The meeting ended coldly.","effects":{"reputation":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"cold_peace"}},"mixed":{"text":"A small trade deal was struck. Not transformative but a start.","effects":{"resources":6,"reputation":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"trade"}},"good":{"text":"A real partnership is forming. Resource sharing, shared intelligence, mutual defense.","effects":{"resources":12,"reputation":8,"security":4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"alliance"}}}},{"id":"b","text_template":"Propose territorial boundaries. Coexistence through separation.","immediate_effects":{},"community_scores":{"bastion":2,"archive":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.8}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The boundary proposal was seen as an insult. They wanted partnership, not walls.","effects":{"reputation":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"cold_peace"}},"mixed":{"text":"Boundaries were agreed. Clear, if cold. Better than conflict.","effects":{"security":4,"stability":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"cold_peace"}},"good":{"text":"Clean lines drawn with mutual respect. Both groups have room to grow.","effects":{"security":6,"stability":5,"reputation":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"boundary"}}}}]',
+		null
+	)
+
+	# Stage 3b — Conflict
+	_insert_chain_event(
+		"chain_rivals_3_conflict", "Escalation with the Rivals", "external",
+		"chain_rivals", 3,
+		'{"reads":["rival_name"],"writes":[]}',
+		'Things with {memory.rival_name} are getting worse. A scuffle at a foraging site. Supplies taken. The community wants a response.',
+		null,
+		'[{"id":"a","text_template":"Retaliate in kind. Take back what was taken.","immediate_effects":{},"community_scores":{"bastion":3,"throne":2},"roll":{"relevant_stats":[{"stat":"security","weight":1.0}],"base_value":0.2,"context_bonuses":[{"condition":"stat_above:security:50","bonus":0.3}]},"outcomes":{"bad":{"text":"The retaliation spiraled. People were hurt on both sides.","effects":{"security":-6,"health":-5,"morale":-4},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"conflict"}},"mixed":{"text":"The raid succeeded but at a cost. The rivalry is entrenched.","effects":{"resources":8,"security":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"rivalry"}},"good":{"text":"A decisive response. {memory.rival_name} backed down after the show of force.","effects":{"security":5,"resources":10},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"deterred"}}}},{"id":"b","text_template":"De-escalate. Try to talk despite the provocation.","immediate_effects":{},"community_scores":{"commonwealth":2,"exchange":2},"roll":{"relevant_stats":[{"stat":"reputation","weight":0.6},{"stat":"stability","weight":0.6}],"base_value":0.2,"context_bonuses":[]},"outcomes":{"bad":{"text":"The peace attempt was seen as weakness. {memory.rival_name} took more.","effects":{"resources":-8,"security":-4,"morale":-5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"conflict"}},"mixed":{"text":"An uneasy ceasefire. Neither side is happy but the bleeding stopped.","effects":{"morale":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"cold_peace"}},"good":{"text":"Against the odds, diplomacy worked. {memory.rival_name} apologized and offered restitution.","effects":{"reputation":6,"resources":6,"morale":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_rivals_4_end","chain_memory_write":{"outcome":"trade"}}}}]',
+		null
+	)
+
+	# Stage 4 — Resolution (no-choice)
+	_insert_chain_event(
+		"chain_rivals_4_end", "The Rivals — Resolution", "external",
+		"chain_rivals", 4,
+		'{"reads":["rival_name"],"writes":[]}',
+		'The situation with {memory.rival_name} has found its equilibrium. Whatever the relationship is now, it is what the community built through its choices.',
+		null, null, null
+	)
+
+	# ========== Chain 5: The Teacher's Legacy (chain_teacher) ==========
+
+	# Stage 1
+	_insert_chain_event(
+		"chain_teacher_1", "The Teacher Approaches", "governance",
+		"chain_teacher", 1,
+		'{"reads":[],"writes":["teacher_name","knowledge_type","committed"]}',
+		'{actor_1} has asked to speak with you privately. They are getting older, they say, and they carry knowledge the community cannot afford to lose. They want to teach — formally, with time set aside.',
+		'{"actor_1":{"required_skills":["teaching","engineering","medicine"],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}',
+		'[{"id":"a","text_template":"Allocate time for formal teaching sessions.","immediate_effects":{"resources":-3},"community_scores":{"archive":3,"commonwealth":2},"roll":{"relevant_stats":[{"stat":"knowledge","weight":0.8},{"stat":"stability","weight":0.4}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The teaching sessions disrupted the work schedule badly. People resent the lost productivity.","effects":{"resources":-5,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_2","chain_memory_write":{"teacher_name":"{actor_1}","knowledge_type":"practical skills","committed":true}},"mixed":{"text":"Teaching has begun. It is slow going but {actor_1} is patient.","effects":{"knowledge":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_2","chain_memory_write":{"teacher_name":"{actor_1}","knowledge_type":"practical skills","committed":true}},"good":{"text":"{actor_1} is a natural teacher. The students are engaged. Real knowledge transfer is happening.","effects":{"knowledge":6,"morale":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_2","chain_memory_write":{"teacher_name":"{actor_1}","knowledge_type":"practical skills","committed":true}}}},{"id":"b","text_template":"Now is not the time. Survival comes first.","immediate_effects":{},"community_scores":{"bastion":1,"throne":1,"archive":-2},"roll":{"relevant_stats":[{"stat":"stability","weight":0.6}],"base_value":0.4,"context_bonuses":[]},"outcomes":{"bad":{"text":"{actor_1} was visibly hurt. Knowledge that could save lives may be lost.","effects":{"morale":-4,"knowledge":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{"teacher_name":"{actor_1}","committed":false}},"mixed":{"text":"{actor_1} accepted the decision with quiet disappointment.","effects":{"morale":-2},"flags_set":[],"flags_cleared":[],"next_stage_id":null,"chain_memory_write":{"teacher_name":"{actor_1}","committed":false}},"good":{"text":"{actor_1} understood. They began teaching informally during meals instead.","effects":{"knowledge":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_2","chain_memory_write":{"teacher_name":"{actor_1}","knowledge_type":"practical skills","committed":false}}}}]',
+		null
+	)
+
+	# Stage 2
+	_insert_chain_event(
+		"chain_teacher_2", "The Teaching Continues", "governance",
+		"chain_teacher", 2,
+		'{"reads":["teacher_name","knowledge_type","committed"],"writes":["committed"]}',
+		'{memory.teacher_name} teaching on {memory.knowledge_type} has been underway for weeks. The students are learning but the work schedule is suffering.',
+		null,
+		'[{"id":"a","text_template":"Double down. Knowledge is the long game.","immediate_effects":{"resources":-5},"community_scores":{"archive":3,"commonwealth":1},"roll":{"relevant_stats":[{"stat":"knowledge","weight":1.0},{"stat":"morale","weight":0.4}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The community resents the ongoing disruption. {memory.teacher_name} feels the hostility.","effects":{"morale":-5,"cohesion":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":true}},"mixed":{"text":"The teaching continued. Not everyone is happy but the students are genuinely learning.","effects":{"knowledge":5},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":true}},"good":{"text":"A breakthrough moment. One of the students solved a problem using what {memory.teacher_name} taught. The value became undeniable.","effects":{"knowledge":8,"morale":4,"cohesion":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":true}}}},{"id":"b","text_template":"Scale it back. Less formal, less disruptive.","immediate_effects":{},"community_scores":{"commonwealth":1},"roll":{"relevant_stats":[{"stat":"stability","weight":0.6},{"stat":"knowledge","weight":0.5}],"base_value":0.3,"context_bonuses":[]},"outcomes":{"bad":{"text":"The scaled-back approach lost momentum. {memory.teacher_name} stopped trying.","effects":{"knowledge":-2,"morale":-3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":false}},"mixed":{"text":"Informal teaching continued at a slower pace. Some knowledge transferred, some lost.","effects":{"knowledge":3},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":false}},"good":{"text":"The lighter approach worked better. People learned at their own pace.","effects":{"knowledge":5,"morale":2},"flags_set":[],"flags_cleared":[],"next_stage_id":"chain_teacher_3_end","chain_memory_write":{"committed":true}}}}]',
+		null
+	)
+
+	# Stage 3 — Resolution (no-choice)
+	_insert_chain_event(
+		"chain_teacher_3_end", "The Teacher's Legacy — Resolution", "governance",
+		"chain_teacher", 3,
+		'{"reads":["teacher_name","knowledge_type","committed"],"writes":[]}',
+		'{memory.teacher_name} teaching on {memory.knowledge_type} has come to a natural end. What was learned will shape the community for years to come.',
+		null, null, null
 	)
