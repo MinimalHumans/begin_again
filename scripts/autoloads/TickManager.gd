@@ -18,6 +18,14 @@ var _stat_defs: Dictionary = {}  # stat_id -> { min_value, max_value }
 # Cache personality templates (personality_id -> Array of template strings)
 var _personality_templates: Dictionary = {}
 
+# Phase 2a: State for event engine
+var _current_state_tags: Array[String] = []
+var _current_world_tags: Array[String] = []
+var _current_flags: Array[String] = []
+var _current_cooldowns: Array = []
+var _current_occurrence_counts: Dictionary = {}
+var _current_game_day: int = 0
+
 
 func _ready() -> void:
 	set_process(true)
@@ -68,7 +76,7 @@ func _run_tick() -> void:
 		stats[row["stat_id"]] = float(row["value"])
 
 	var pop_rows := DatabaseManager.query_save(
-		"SELECT id, name, age, gender, alive, skills, personality, flags, assigned_role FROM population WHERE alive = 1;"
+		"SELECT id, name, age, gender, alive, skills, personality, flags, assigned_role, joined_day, last_mentioned FROM population WHERE alive = 1;"
 	)
 
 	var roles := GameData.get_all_roles()
@@ -96,6 +104,14 @@ func _run_tick() -> void:
 	var gs_for_sim := game_state.duplicate()
 	gs_for_sim["daily_health_pressure"] = float(game_state.get("daily_health_pressure", 0.0))
 
+	# --- Step 1b: Load event engine state ---
+	_current_game_day = game_day
+	FlagSystem.invalidate_cache()
+	_current_world_tags = _load_world_tags()
+	_current_flags = _load_flags()
+	_current_cooldowns = _load_cooldowns()
+	_current_occurrence_counts = _load_occurrence_counts()
+
 	# --- Step 2: Calculate role bonuses ---
 	var role_bonuses: Dictionary = {}
 	var role_food_production: float = 0.0
@@ -122,6 +138,11 @@ func _run_tick() -> void:
 			"UPDATE current_stats SET value = ? WHERE stat_id = ?;",
 			[new_val, stat_id]
 		)
+
+	# --- Step 4b: Compute state tags ---
+	var recent_log := _load_recent_log_days(game_day)
+	var known_skills := GameData.get_all_skill_ids()
+	_current_state_tags = StateTagSystem.compute(stats, pop_rows, gs_for_sim, known_skills, recent_log)
 
 	# --- Step 5: Run PopulationLifecycle ---
 	var lifecycle := PopulationLifecycle.run_tick(pop_rows, stats, gs_for_sim, config)
@@ -508,3 +529,36 @@ func _trigger_game_over(reason: String) -> void:
 	push_warning("GAME OVER: " + reason)
 	current_speed = 0
 	game_over_triggered.emit(reason)
+
+
+# ---------- Phase 2a: Event Engine Support ----------
+
+func _load_world_tags() -> Array[String]:
+	var rows := DatabaseManager.query_save("SELECT tag FROM world_tags")
+	var result: Array[String] = []
+	for r in rows:
+		result.append(str(r["tag"]))
+	return result
+
+
+func _load_flags() -> Array[String]:
+	return FlagSystem.get_all_flags()
+
+
+func _load_cooldowns() -> Array:
+	return DatabaseManager.query_save("SELECT * FROM cooldowns WHERE expires_day > ?", [_current_game_day])
+
+
+func _load_occurrence_counts() -> Dictionary:
+	var rows := DatabaseManager.query_save("SELECT event_id, count FROM event_occurrence_counts")
+	var result := {}
+	for row in rows:
+		result[row["event_id"]] = row["count"]
+	return result
+
+
+func _load_recent_log_days(game_day: int) -> Array:
+	return DatabaseManager.query_save(
+		"SELECT * FROM event_log WHERE game_day >= ?;",
+		[game_day - 7]
+	)
