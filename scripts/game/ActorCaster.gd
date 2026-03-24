@@ -29,6 +29,7 @@ static func cast(
 
 		var required_skills: Array = slot.get("required_skills", []) if slot.get("required_skills") is Array else []
 		var required_personality = slot.get("required_personality")
+		var required_role: String = str(slot.get("required_role", "")) if slot.get("required_role") != null else ""
 		var excluded_flags: Array = slot.get("excluded_flags", []) if slot.get("excluded_flags") is Array else []
 		var prefer_not_recent: bool = slot.get("prefer_not_recent", false) == true
 
@@ -38,6 +39,11 @@ static func cast(
 			var pid: String = str(person.get("id", ""))
 			if pid in used_ids:
 				continue
+
+			# Check required_role
+			if required_role != "":
+				if str(person.get("assigned_role", "")) != required_role:
+					continue
 
 			# Check required_skills
 			if required_skills.size() > 0:

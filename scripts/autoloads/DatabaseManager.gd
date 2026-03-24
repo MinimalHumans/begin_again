@@ -16,6 +16,11 @@ func open_library() -> bool:
 	if not check or _library_db.query_result.size() == 0:
 		_create_library_schema()
 		_seed_library_data()
+	else:
+		# Ensure events table exists and is seeded (added in Phase 2b)
+		_library_db.query("SELECT COUNT(*) AS cnt FROM events WHERE tier = 1;")
+		if _library_db.query_result.size() == 0 or int(_library_db.query_result[0].get("cnt", 0)) < 50:
+			_seed_tier1_events()
 
 	return true
 
@@ -359,6 +364,7 @@ func _seed_library_data() -> void:
 	_seed_personalities()
 	_seed_roles()
 	_seed_community_types()
+	_seed_tier1_events()
 
 
 func _seed_stats() -> void:
@@ -540,3 +546,101 @@ func _seed_community_types() -> void:
 			"INSERT INTO community_types (id, display_name, description, roll_modifiers, reveal_text, thresholds) VALUES (?, ?, ?, ?, ?, ?);",
 			[r[0], r[1], r[2], r[3], r[4], thresholds]
 		)
+
+
+func _seed_tier1_events() -> void:
+	# Skip if events already seeded
+	_library_db.query("SELECT COUNT(*) AS cnt FROM events WHERE tier = 1;")
+	if _library_db.query_result.size() > 0 and int(_library_db.query_result[0].get("cnt", 0)) >= 50:
+		return
+
+	var actor_1_only := '{"actor_1":{"required_skills":[],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+	var actor_1_and_2 := '{"actor_1":{"required_skills":[],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true},"actor_2":{"required_skills":[],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+
+	# --- Group A: Universal Daily Life (20 events) ---
+	var group_a := [
+		["amb_work_morning", "{actor_1} worked through the morning without complaint.", "{}", actor_1_only, 3, 1.0, null],
+		["amb_talking", "{actor_1} was seen talking with {actor_2} near {building}.", "{}", actor_1_and_2, 2, 1.0, null],
+		["amb_laughter", "Laughter from {building} tonight. It was good to hear.", "{}", null, 5, 0.8, null],
+		["amb_afternoon", "{actor_1} spent the afternoon in {building}, keeping busy.", "{}", actor_1_only, 2, 1.0, null],
+		["amb_repair_anon", "Someone repaired a section of the outer perimeter. Nobody claimed credit.", "{}", null, 7, 0.7, null],
+		["amb_disagreement_resolved", "{actor_1} and {actor_2} settled a small disagreement before it became anything more.", "{}", actor_1_and_2, 4, 0.9, null],
+		["amb_quiet_day", "A quiet day. {actor_1} worked. Others rested. The world outside stayed away.", "{}", actor_1_only, 4, 0.8, null],
+		["amb_early_riser", "{actor_1} was up before dawn again.", "{}", actor_1_only, 3, 1.0, null],
+		["amb_gathered", "The community gathered briefly near {building}. No agenda. Just people.", "{}", null, 6, 0.7, null],
+		["amb_teaching", "{actor_1} was explaining something to a small group near {building}.", "{}", actor_1_only, 5, 0.8, null],
+		["amb_stores_check", "{actor_1} checked the stores and said nothing. Their expression said enough.", "{}", actor_1_only, 4, 1.0, null],
+		["amb_quiet_incident", "The day passed without incident. For once.", "{}", null, 6, 0.6, null],
+		["amb_fix_unnoticed", "{actor_1} fixed something nobody else had noticed was broken.", "{}", actor_1_only, 5, 0.9, null],
+		["amb_brief_argument", "There was a brief argument near {building}. It passed.", "{}", null, 3, 1.0, null],
+		["amb_watching", "{actor_1} was seen watching the treeline for a long time.", "{}", actor_1_only, 4, 0.9, null],
+		["amb_late_night", "Two people sat together in {building} long after dark. Nobody asked why.", "{}", null, 7, 0.7, null],
+		["amb_rotation", "{actor_1} organized a small work rotation for the afternoon.", "{}", actor_1_only, 5, 0.8, null],
+		["amb_cooking", "Smoke from {building} in the evening — someone was cooking something that actually smelled good.", "{}", null, 5, 0.9, null],
+		["amb_bad_sleep", "Nobody slept well. It showed in the morning.", "{}", null, 4, 0.8, null],
+		["amb_herbs", "Someone left a small bundle of herbs near the door. Nobody claimed them.", "{}", null, 7, 0.6, null],
+	]
+
+	for e in group_a:
+		_insert_tier1_event(e[0], e[1], "ambient", e[2], e[3], e[4], e[5], e[6])
+
+	# --- Group B: Stat-Gated Mood Reflectors (10 events) ---
+	var group_b := [
+		["amb_morale_brittle", "Morale is brittle. People are going through the motions.", '{"required_state_tags":["morale_low"]}', null, 5, 1.0],
+		["amb_breakdown", "{actor_1} broke down near {building}. Others gave them space.", '{"required_state_tags":["morale_critical"]}', actor_1_only, 7, 1.0],
+		["amb_mood_lifted", "The mood has lifted slightly. Nothing specific — just a feeling.", '{"required_state_tags":["morale_good"]}', null, 6, 0.8],
+		["amb_coughing", "Several people are coughing. It may be nothing.", '{"required_state_tags":["health_low"]}', null, 5, 1.0],
+		["amb_injured_struggling", "The injured are being tended to. It is not going well.", '{"required_state_tags":["health_critical"]}', null, 4, 1.0],
+		["amb_food_anxiety", "{actor_1} checked the stores again. The numbers haven't changed.", '{"required_state_tags":["food_low"]}', actor_1_only, 4, 1.0],
+		["amb_rationing_tension", "Rationing has changed how people relate to each other. Not for the better.", '{"required_state_tags":["food_low"]}', null, 6, 0.9],
+		["amb_looking_over_shoulder", "People are looking over their shoulders more than usual.", '{"required_state_tags":["security_low"]}', null, 5, 1.0],
+		["amb_steady_feeling", "There's a steadiness to people lately. Things feel more organized.", '{"required_state_tags":["stability_good"]}', null, 7, 0.7],
+		["amb_fractured", "The community feels fractured. Groups eat apart. Work alone.", '{"required_state_tags":["cohesion_low"]}', null, 5, 1.0],
+	]
+
+	for e in group_b:
+		_insert_tier1_event(e[0], e[1], "ambient", e[2], e[3], e[4], e[5], null)
+
+	# --- Group C: Seasonal (8 events) ---
+	var group_c := [
+		["amb_winter_cold", "The first real cold of the season. Everyone felt it.", '{"required_state_tags":["season_winter"]}', null, 14, 1.0, '["winter"]'],
+		["amb_winter_snow", "Snow overnight. The world is quieter and harder.", '{"required_state_tags":["season_winter"]}', null, 7, 1.0, '["winter"]'],
+		["amb_winter_morning", "{actor_1} was the first one up on a grey winter morning.", '{"required_state_tags":["season_winter"]}', actor_1_only, 5, 0.9, '["winter"]'],
+		["amb_spring_days", "The days are getting longer. It lifts the mood in ways that are hard to explain.", '{"required_state_tags":["season_spring"]}', null, 10, 0.9, '["spring"]'],
+		["amb_spring_rain", "Rain again. But the ground needs it.", '{"required_state_tags":["season_spring"]}', null, 5, 1.0, '["spring"]'],
+		["amb_summer_heat", "Summer heat is wearing on everyone. Work slows in the afternoon.", '{"required_state_tags":["season_summer"]}', null, 7, 1.0, '["summer"]'],
+		["amb_fall_harvest", "The harvest is underway. Everyone is working.", '{"required_state_tags":["season_fall"]}', null, 10, 1.0, '["fall"]'],
+		["amb_fall_smell", "There's that autumn smell in the air. Another season passing.", '{"required_state_tags":["season_fall"]}', null, 10, 0.8, '["fall"]'],
+	]
+
+	for e in group_c:
+		_insert_tier1_event(e[0], e[1], "ambient", e[2], e[3], e[4], e[5], e[6])
+
+	# --- Group D: Role & Skill Specific (7 events) ---
+	var actor_medicine := '{"actor_1":{"required_skills":["medicine"],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+	var actor_farming := '{"actor_1":{"required_skills":["farming"],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+	var actor_combat := '{"actor_1":{"required_skills":["combat"],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+	var actor_teaching := '{"actor_1":{"required_skills":["teaching"],"required_personality":null,"excluded_flags":[],"prefer_not_recent":true}}'
+	var actor_scavenger_role := '{"actor_1":{"required_skills":[],"required_personality":null,"required_role":"scavenger","excluded_flags":[],"prefer_not_recent":true}}'
+
+	_insert_tier1_event("amb_medic_working", "{actor_1} {actor_1_modifier} spent the morning tending to the sick.", "ambient", '{"required_state_tags":["has_skill_medicine"]}', actor_medicine, 4, 1.0, null)
+	_insert_tier1_event("amb_farmer_early", "{actor_1} was out in the field before anyone else was awake.", "ambient", '{"required_state_tags":["has_skill_farming"]}', actor_farming, 4, 1.0, null)
+	_insert_tier1_event("amb_guard_perimeter", "{actor_1} walked the perimeter at dusk, checking every section.", "ambient", '{"required_state_tags":["has_skill_combat"]}', actor_combat, 4, 1.0, null)
+	_insert_tier1_event("amb_teacher_group", "{actor_1} was explaining something to a small group near {building}. They looked like they were actually learning.", "ambient", '{"required_state_tags":["has_skill_teaching"]}', actor_teaching, 5, 1.0, null)
+	_insert_tier1_event("amb_no_medic", "The medic role sits empty. People are treating their own injuries as best they can.", "ambient", '{"required_state_tags":["role_vacant_medic"]}', null, 7, 1.0, null)
+	_insert_tier1_event("amb_no_scavenger", "Nobody has scouted the surrounding area in days. Supplies are what they are.", "ambient", '{"required_state_tags":["role_vacant_scavenger"]}', null, 7, 0.9, null)
+	_insert_tier1_event("amb_scavenger_return", "{actor_1} came back from the surrounding area with something useful.", "ambient", "{}", actor_scavenger_role, 3, 1.0, null)
+
+	# --- Group E: Lifecycle Follow-Ups (5 events) ---
+	_insert_tier1_event("amb_grief_visible", "{actor_1} has been quiet since the recent loss. The grief sits on them visibly.", "ambient", '{"required_state_tags":["recent_death"]}', actor_1_only, 5, 1.0, null)
+	_insert_tier1_event("amb_baby_heard", "The new baby's crying can be heard from {building}. Some people smile at it.", "ambient", '{"required_state_tags":["recent_birth"]}', null, 4, 0.9, null)
+	_insert_tier1_event("amb_empty_bunk", "The empty space where someone slept is still there. Nobody has moved anything.", "ambient", '{"required_state_tags":["recent_death"]}', null, 7, 0.8, null)
+	_insert_tier1_event("amb_newcomer_observed", "There's a new face among them. The others are still deciding what to think.", "ambient", '{"required_state_tags":["newcomers_present"]}', null, 6, 0.9, null)
+	_insert_tier1_event("amb_processing_loss", "People are still processing the loss. Work continues because it must.", "ambient", '{"required_state_tags":["recent_death"]}', actor_1_only, 6, 1.0, null)
+
+
+func _insert_tier1_event(id: String, desc_template: String, category: String, eligibility, actor_req, cooldown_days: int, weight: float, seasonal_tags) -> void:
+	_library_db.query_with_bindings(
+		"INSERT INTO events (id, tier, category, title, eligibility, description_template, actor_requirements, choices, chain_id, chain_stage, chain_memory_schema, cooldown_days, exclusion_group, max_occurrences, content_tags, seasonal_tags, weight) VALUES (?, 1, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?);",
+		[id, category, id, eligibility if eligibility != null else "{}", desc_template, actor_req, cooldown_days, seasonal_tags, weight]
+	)

@@ -15,9 +15,6 @@ var _pending_log_entries: Array = []
 # Cache stat definitions from library for clamping
 var _stat_defs: Dictionary = {}  # stat_id -> { min_value, max_value }
 
-# Cache personality templates (personality_id -> Array of template strings)
-var _personality_templates: Dictionary = {}
-
 # Phase 2a: State for event engine
 var _current_state_tags: Array[String] = []
 var _current_world_tags: Array[String] = []
@@ -190,8 +187,15 @@ func _run_tick() -> void:
 		[living_count]
 	)
 
-	# --- Step 5b: Generate ambient log entries ---
-	_maybe_generate_ambient(game_day, pop_rows, stats)
+	# --- Step 5b: Fire Tier 1 ambient events ---
+	# Re-fetch living population after lifecycle changes
+	var pop_after := DatabaseManager.query_save(
+		"SELECT id, name, age, gender, alive, skills, personality, flags, assigned_role, joined_day, last_mentioned, mention_context FROM population WHERE alive = 1;"
+	)
+	_fire_ambient_events(stats, pop_after, gs_for_sim)
+
+	# --- Step 5c: Generate stat warnings ---
+	_maybe_generate_stat_warning(game_day, stats)
 
 	# --- Step 6: Update season ---
 	var day_of_year: int = (game_state["starting_day_of_year"] + game_day) % 365
@@ -266,53 +270,194 @@ func _run_tick() -> void:
 			_ui_event_log.append_entry(entry)
 
 
-# ---------- Ambient Log Generation ----------
+# ---------- Tier 1 Ambient Event Firing ----------
 
-func _maybe_generate_ambient(game_day: int, population: Array, stats: Dictionary) -> void:
+# Cache for location structures (location_id -> Array)
+var _location_structures_cache: Dictionary = {}
+
+func _fire_ambient_events(stats: Dictionary, population: Array, game_state: Dictionary) -> void:
 	if population.size() == 0:
 		return
 
-	# ~25% chance per day of an ambient entry
-	if randf() > 0.25:
-		# Also check for stat warnings even on no-ambient days
-		_maybe_generate_stat_warning(game_day, stats)
+	var game_day: int = int(game_state.get("game_day", _current_game_day))
+
+	# Roll event count: 0 (15%), 1 (45%), 2 (30%), 3 (10%)
+	var r := randf()
+	var event_count: int
+	if r < 0.15:
+		event_count = 0
+	elif r < 0.60:
+		event_count = 1
+	elif r < 0.90:
+		event_count = 2
+	else:
+		event_count = 3
+
+	if event_count == 0:
 		return
 
-	# Cache personality templates
-	if _personality_templates.is_empty():
-		var rows := DatabaseManager.query_library("SELECT id, ambient_templates FROM personalities;")
-		for row in rows:
-			var templates: Array = JSON.parse_string(str(row["ambient_templates"]))
-			if templates != null and templates.size() > 0:
-				_personality_templates[str(row["id"])] = templates
+	# Build eligible pool of Tier 1 events
+	var all_events := GameData.get_all_events()
+	var eligible_pool: Array = []
+	for ev in all_events:
+		if int(ev.get("tier", 0)) != 1:
+			continue
+		if EligibilityEngine.is_eligible(
+			ev, _current_world_tags, _current_state_tags, stats,
+			_current_flags, population, game_day,
+			_current_cooldowns, _current_occurrence_counts
+		):
+			eligible_pool.append(ev)
 
-	# Pick a random living person
-	var actor_1: Dictionary = population[randi() % population.size()]
-	var personality_id: String = str(actor_1.get("personality", "caregiver"))
-
-	if not _personality_templates.has(personality_id):
+	if eligible_pool.size() == 0:
 		return
 
-	var templates: Array = _personality_templates[personality_id]
-	var template: String = templates[randi() % templates.size()]
+	# Fetch location structures (cached)
+	var location_id: String = str(game_state.get("location_id", ""))
+	var structures: Array = _get_location_structures(location_id)
 
-	# Pick a second actor for {actor_2} if needed
-	var actor_2_name := ""
-	if template.contains("{actor_2}") and population.size() > 1:
-		var actor_2: Dictionary = actor_1
-		var attempts := 0
-		while actor_2["id"] == actor_1["id"] and attempts < 10:
-			actor_2 = population[randi() % population.size()]
-			attempts += 1
-		actor_2_name = str(actor_2["name"])
+	# Fire events
+	var fired := 0
+	while fired < event_count and eligible_pool.size() > 0:
+		# Weighted random selection from pool
+		var selected_event: Dictionary = _weighted_select_event(eligible_pool)
+		if selected_event.is_empty():
+			break
 
-	var text: String = template.replace("{actor_1}", str(actor_1["name"]))
-	text = text.replace("{actor_2}", actor_2_name)
+		# Cast actors
+		var cast_actors: Dictionary = {}
+		var req_raw = selected_event.get("actor_requirements")
+		if req_raw != null and str(req_raw).strip_edges() != "":
+			var cast_ok := false
+			var attempts := 0
+			while not cast_ok and attempts < 3:
+				cast_actors = ActorCaster.cast(selected_event, population, game_day)
+				if cast_actors.is_empty():
+					attempts += 1
+				else:
+					cast_ok = true
+			if not cast_ok:
+				# Remove failed event from pool and try next
+				eligible_pool.erase(selected_event)
+				continue
 
-	_write_log_entry(game_day, 1, "ambient", text)
+		# Resolve template
+		var template_text: String = str(selected_event.get("description_template", ""))
+		var resolved := TemplateResolver.resolve_event(
+			template_text, cast_actors, stats, game_state, structures, {}
+		)
 
-	# Also try stat warnings less frequently
-	_maybe_generate_stat_warning(game_day, stats)
+		# Write log entry
+		var category: String = str(selected_event.get("category", "ambient"))
+		var event_id: String = str(selected_event.get("id", ""))
+		DatabaseManager.execute_save(
+			"INSERT INTO event_log (game_day, tier, event_id, category, display_text, is_highlighted, is_major) VALUES (?, 1, ?, ?, ?, 0, 0);",
+			[game_day, event_id, category, resolved]
+		)
+		var entry := {
+			"game_day": game_day,
+			"tier": 1,
+			"category": category,
+			"display_text": resolved,
+			"event_id": event_id,
+			"is_highlighted": 0,
+			"is_major": 0
+		}
+		_pending_log_entries.append(entry)
+
+		# Update actor last_mentioned and mention_context
+		for actor_key in cast_actors:
+			var person: Dictionary = cast_actors[actor_key]
+			var pid: String = str(person.get("id", ""))
+			var mention_ctx := _get_mention_context(category, structures, game_day)
+			DatabaseManager.execute_save(
+				"UPDATE population SET last_mentioned = ?, mention_context = ? WHERE id = ?;",
+				[game_day, mention_ctx, pid]
+			)
+
+		# Record cooldown
+		var cd_days = selected_event.get("cooldown_days", 0)
+		if cd_days != null and int(cd_days) > 0:
+			DatabaseManager.execute_save(
+				"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (?, NULL, ?);",
+				[event_id, game_day + int(cd_days)]
+			)
+		var excl = selected_event.get("exclusion_group")
+		if excl != null and str(excl) != "":
+			DatabaseManager.execute_save(
+				"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (NULL, ?, ?);",
+				[str(excl), game_day + int(selected_event.get("cooldown_days", 7))]
+			)
+
+		# Increment occurrence count
+		var prev_count: int = _current_occurrence_counts.get(event_id, 0)
+		DatabaseManager.execute_save(
+			"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
+			[event_id, prev_count + 1]
+		)
+		_current_occurrence_counts[event_id] = prev_count + 1
+
+		# Add to cooldowns cache so same event doesn't fire again this tick
+		_current_cooldowns.append({
+			"event_id": event_id,
+			"exclusion_group": selected_event.get("exclusion_group"),
+			"expires_day": game_day + maxi(int(cd_days if cd_days != null else 0), 1)
+		})
+
+		# Remove from pool
+		eligible_pool.erase(selected_event)
+		fired += 1
+
+
+func _weighted_select_event(pool: Array) -> Dictionary:
+	if pool.size() == 0:
+		return {}
+	var total_weight: float = 0.0
+	for ev in pool:
+		total_weight += float(ev.get("weight", 1.0))
+	var roll: float = randf() * total_weight
+	var cumulative: float = 0.0
+	for ev in pool:
+		cumulative += float(ev.get("weight", 1.0))
+		if roll <= cumulative:
+			return ev
+	return pool[pool.size() - 1]
+
+
+func _get_location_structures(location_id: String) -> Array:
+	if _location_structures_cache.has(location_id):
+		return _location_structures_cache[location_id]
+	var rows := DatabaseManager.query_library(
+		"SELECT structures FROM locations WHERE id = ?;", [location_id]
+	)
+	var structures: Array = []
+	if rows.size() > 0:
+		var parsed = JSON.parse_string(str(rows[0].get("structures", "[]")))
+		if parsed is Array:
+			structures = parsed
+	_location_structures_cache[location_id] = structures
+	return structures
+
+
+func _get_mention_context(category: String, structures: Array, game_day: int) -> String:
+	match category:
+		"ambient":
+			var building := "the common area"
+			if structures.size() > 0:
+				building = str(structures[randi() % structures.size()])
+			return "who was seen near " + building
+		"death":
+			return "who died on day " + str(game_day)
+		"birth":
+			return "who was born on day " + str(game_day)
+		"departure":
+			return "who left the community"
+		"interpersonal":
+			return "who was involved in a recent dispute"
+		"resource":
+			return "who helped manage supplies"
+		_:
+			return "who was recently mentioned"
 
 
 func _maybe_generate_stat_warning(game_day: int, stats: Dictionary) -> void:
