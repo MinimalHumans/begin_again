@@ -26,6 +26,9 @@ var _current_game_day: int = 0
 # Phase 2c: Tier 2 popup state
 var _popup_active: bool = false
 
+# Game over state
+var _game_over: bool = false
+
 # Phase 3b: Chain stage queue — process one per tick
 var _pending_chain_stages: Array = []
 
@@ -64,6 +67,8 @@ func _process(delta: float) -> void:
 
 
 func _run_tick() -> void:
+	if _game_over:
+		return
 	_pending_log_entries.clear()
 
 	# --- Step 1: Load current state ---
@@ -123,7 +128,7 @@ func _run_tick() -> void:
 	role_food_production = _calculate_role_food_production(roles, pop_rows)
 
 	# --- Step 3: Run PassiveSimulation ---
-	var deltas := PassiveSimulation.run_tick(stats, gs_for_sim, role_bonuses, config, role_food_production)
+	var deltas := PassiveSimulation.run_tick(stats, gs_for_sim, role_bonuses, config, role_food_production, _popup_active)
 
 	# --- Step 4: Apply stat deltas ---
 	var stability_factor: float = 0.5 + (float(stats.get("stability", 50.0)) / 100.0) * 0.5
@@ -285,14 +290,8 @@ func _run_tick() -> void:
 	)
 
 	# --- Step 10: Check loss conditions ---
-	if float(stats.get("population", 0)) < 3:
-		_trigger_game_over("Population collapse")
-		return
-	if float(stats.get("food", 0)) <= 0:
-		_trigger_game_over("Starvation")
-		return
-	if float(stats.get("cohesion", 0)) <= 0:
-		_trigger_game_over("Cohesion failure")
+	_check_loss_conditions(stats, game_state)
+	if _game_over:
 		return
 
 	# --- Step 11: Advance game_day ---
@@ -1085,6 +1084,11 @@ func _on_tier3_choice_made(
 		for s in all_stats:
 			_stat_defs[s["id"]] = s
 
+	# --- Self-sacrifice special handling ---
+	if choice.get("_self_sacrifice", false):
+		_handle_self_sacrifice(choice, event, stats, game_state_snapshot, game_day)
+		return
+
 	var stability_factor: float = 0.5 + (float(stats.get("stability", 50.0)) / 100.0) * 0.5
 	var all_deltas: Dictionary = {}
 
@@ -1876,9 +1880,108 @@ func _get_season(day_of_year: int) -> String:
 	return "winter"
 
 
-func _trigger_game_over(reason: String) -> void:
-	push_warning("GAME OVER: " + reason)
+func _handle_self_sacrifice(choice: Dictionary, event: Dictionary, stats: Dictionary, game_state: Dictionary, game_day: int) -> void:
+	_popup_active = false
+
+	# Apply immediate effects (morale +15, cohesion +10)
+	var stability_factor: float = 0.5 + (float(stats.get("stability", 50.0)) / 100.0) * 0.5
+	var imm_effects = choice.get("immediate_effects", {})
+	if imm_effects is Dictionary:
+		for stat_id in imm_effects:
+			var delta: float = float(imm_effects[stat_id])
+			if delta > 0:
+				delta *= stability_factor
+			var new_val: float = float(stats.get(stat_id, 0.0)) + delta
+			if _stat_defs.has(stat_id):
+				var sdef: Dictionary = _stat_defs[stat_id]
+				new_val = clampf(new_val, float(sdef["min_value"]), float(sdef["max_value"]))
+			stats[stat_id] = new_val
+			DatabaseManager.execute_save(
+				"UPDATE current_stats SET value = ? WHERE stat_id = ?;",
+				[new_val, stat_id]
+			)
+
+	# Apply community scores
+	var comm_scores = choice.get("community_scores", {})
+	if comm_scores is Dictionary:
+		for type_id in comm_scores:
+			var pts: float = float(comm_scores[type_id])
+			DatabaseManager.execute_save(
+				"UPDATE community_scores SET score = score + ? WHERE type_id = ?;",
+				[pts, type_id]
+			)
+
+	# Write the outcome log entry
+	var outcome_text := "You stayed. The others went ahead. They didn't look back — you told them not to."
+	var choice_text: String = str(choice.get("_resolved_text", choice.get("text_template", "")))
+	var display_text: String = "You chose: " + choice_text + "\n\n" + outcome_text
+	DatabaseManager.execute_save(
+		"INSERT INTO event_log (game_day, tier, event_id, category, display_text, choice_made, outcome_tier, is_highlighted, is_major) VALUES (?, 3, ?, 'moral', ?, 'a', 'good', 1, 1);",
+		[game_day, str(event.get("id", "")), display_text]
+	)
+	var entry := {
+		"game_day": game_day,
+		"tier": 3,
+		"category": "moral",
+		"display_text": display_text,
+		"is_highlighted": 1,
+		"is_major": 1
+	}
+	log_entry_added.emit(entry)
+	if _ui_event_log:
+		_ui_event_log.append_entry(entry)
+
+	# Trigger game over with self-sacrifice coda
+	_game_over = true
 	current_speed = 0
+	DatabaseManager.execute_save(
+		"UPDATE game_state SET game_over = 1, game_over_reason = 'self_sacrifice' WHERE id = 1",
+		[]
+	)
+	EndingSystem.begin_self_sacrifice_coda(stats, game_state)
+	game_over_triggered.emit("self_sacrifice")
+
+
+func _check_loss_conditions(stats: Dictionary, game_state: Dictionary) -> void:
+	if _game_over:
+		return
+
+	# 1. Population collapse
+	if stats.get("population", 999) <= 5:
+		_trigger_game_over("population_collapse", stats, game_state)
+		return
+
+	# 2. Starvation
+	if stats.get("food", 999) <= 0:
+		_trigger_game_over("starvation", stats, game_state)
+		return
+
+	# 3. Cohesion failure
+	if stats.get("cohesion", 999) <= 0:
+		_trigger_game_over("cohesion_failure", stats, game_state)
+		return
+
+	# 4. Overthrow — stability hits 0
+	if stats.get("stability", 999) <= 0:
+		_trigger_game_over("overthrow", stats, game_state)
+		return
+
+	# 5. Extinction — handled by event outcomes that set flag "extinction_event"
+	if FlagSystem.has_flag("extinction_event"):
+		_trigger_game_over("extinction", stats, game_state)
+		return
+
+
+func _trigger_game_over(reason: String, stats: Dictionary, game_state: Dictionary) -> void:
+	_game_over = true
+	current_speed = 0
+	# Write to save.db
+	DatabaseManager.execute_save(
+		"UPDATE game_state SET game_over = 1, game_over_reason = ? WHERE id = 1",
+		[reason]
+	)
+	# Begin the epilogue sequence
+	EndingSystem.begin_epilogue(reason, stats, game_state)
 	game_over_triggered.emit(reason)
 
 

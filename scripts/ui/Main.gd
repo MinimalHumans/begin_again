@@ -13,6 +13,9 @@ func _ready() -> void:
 	# Register UI with TickManager
 	TickManager.register_ui(event_log, stats_panel)
 
+	# Register EndingSystem with scene root and event log
+	EndingSystem.register(self, event_log)
+
 	# Connect TimeControls speed signal to TickManager
 	time_controls.speed_changed.connect(
 		func(speed: int): TickManager.set_speed(speed)
@@ -39,6 +42,7 @@ func _ready() -> void:
 func start_new_game() -> void:
 	# Stop any running simulation
 	TickManager.set_speed(0)
+	TickManager._game_over = false
 
 	# Wipe save.db and recreate schema
 	DatabaseManager.reset_save("user://save.db")

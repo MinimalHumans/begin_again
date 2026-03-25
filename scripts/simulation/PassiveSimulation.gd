@@ -6,7 +6,8 @@ static func run_tick(
 	game_state: Dictionary,
 	role_bonuses: Dictionary,
 	config: Dictionary,
-	role_food_production: float
+	role_food_production: float,
+	popup_active: bool = false
 ) -> Dictionary:
 	var delta := {}
 	var population: float = maxf(float(stats.get("population", 1)), 1.0)
@@ -61,5 +62,9 @@ static func run_tick(
 	# --- Knowledge ---
 	var teacher_bonus: float = float(role_bonuses.get("knowledge", 0.0))
 	delta["knowledge"] = teacher_bonus
+
+	# --- Overthrow pressure ---
+	if popup_active and stats.get("stability", 100) < 10:
+		delta["stability"] = delta.get("stability", 0) - 2.0
 
 	return delta
