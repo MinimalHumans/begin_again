@@ -11,6 +11,7 @@ const COL_RED_CRIT := Color("#b03030")
 const COL_BAR_BG := Color("#333333")
 
 signal new_game_requested
+signal roster_requested
 
 var _stat_rows: Dictionary = {}  # stat_id -> { bar_fill, value_label, stat_def }
 var _day_season_label: Label
@@ -54,6 +55,33 @@ func _ready() -> void:
 	btn.add_theme_stylebox_override("pressed", btn_hover)
 
 	btn.pressed.connect(func(): new_game_requested.emit())
+
+	# Style the Roster button
+	var roster_btn: Button = $VBoxContainer/RosterButton
+	roster_btn.flat = true
+	roster_btn.add_theme_font_size_override("font_size", 13)
+	roster_btn.add_theme_color_override("font_color", COL_TEXT_PRIMARY)
+	roster_btn.add_theme_color_override("font_hover_color", COL_TEXT_PRIMARY)
+	roster_btn.add_theme_color_override("font_pressed_color", COL_TEXT_PRIMARY)
+
+	var roster_normal := StyleBoxFlat.new()
+	roster_normal.bg_color = Color("#2a2a2a")
+	roster_normal.content_margin_left = 8.0
+	roster_normal.content_margin_right = 8.0
+	roster_normal.content_margin_top = 6.0
+	roster_normal.content_margin_bottom = 6.0
+	roster_btn.add_theme_stylebox_override("normal", roster_normal)
+
+	var roster_hover := StyleBoxFlat.new()
+	roster_hover.bg_color = Color("#3a3a3a")
+	roster_hover.content_margin_left = 8.0
+	roster_hover.content_margin_right = 8.0
+	roster_hover.content_margin_top = 6.0
+	roster_hover.content_margin_bottom = 6.0
+	roster_btn.add_theme_stylebox_override("hover", roster_hover)
+	roster_btn.add_theme_stylebox_override("pressed", roster_hover)
+
+	roster_btn.pressed.connect(func(): roster_requested.emit())
 
 
 func build(stat_definitions: Array) -> void:

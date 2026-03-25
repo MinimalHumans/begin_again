@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/StatsPanel.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/EventLog.tscn" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/ui/TimeControls.tscn" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/ui/RosterPanel.tscn" id="5"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -58,3 +59,14 @@ size_flags_vertical = 3
 [node name="TimeControls" parent="Layout/RightArea" instance=ExtResource("4")]
 layout_mode = 2
 custom_minimum_size = Vector2(0, 60)
+
+[node name="RosterPanel" parent="." instance=ExtResource("5")]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -420.0
+grow_horizontal = 0
+grow_vertical = 2
+visible = false

@@ -3,6 +3,7 @@ extends Control
 @onready var stats_panel: PanelContainer = $Layout/StatsPanel
 @onready var event_log: PanelContainer = $Layout/RightArea/EventLog
 @onready var time_controls: PanelContainer = $Layout/RightArea/TimeControls
+@onready var _roster_panel: PanelContainer = $RosterPanel
 
 
 func _ready() -> void:
@@ -22,6 +23,10 @@ func _ready() -> void:
 
 	# Connect New Game button
 	stats_panel.new_game_requested.connect(start_new_game)
+
+	# Connect Roster panel
+	stats_panel.roster_requested.connect(_on_roster_requested)
+	_roster_panel.closed.connect(func(): _roster_panel.hide())
 
 	# If no game_state exists, start a new game automatically
 	var existing := DatabaseManager.query_save("SELECT id FROM game_state LIMIT 1;")
@@ -67,3 +72,8 @@ func _enter_gameplay() -> void:
 
 func _on_day_advanced(_new_day: int, _new_season: String) -> void:
 	pass
+
+
+func _on_roster_requested() -> void:
+	_roster_panel.refresh()
+	_roster_panel.show()

@@ -118,6 +118,82 @@ static func generate() -> Dictionary:
 			"INSERT INTO community_scores (type_id, score) VALUES (?, 0.0);", [ct["id"]]
 		)
 
+	# Step 8b — Auto-assign starting roles
+	var role_priority := ["medic", "farmer", "guard", "teacher", "scavenger", "builder"]
+	var all_roles := DatabaseManager.query_library("SELECT * FROM roles;")
+	var role_map := {}
+	for role in all_roles:
+		role_map[role["id"]] = role
+
+	for role_id in role_priority:
+		if not role_map.has(role_id):
+			continue
+		var role: Dictionary = role_map[role_id]
+		var max_slots: int = int(role["max_slots"])
+		var required_skills: Array = JSON.parse_string(str(role["required_skills"]))
+		if required_skills == null:
+			required_skills = []
+
+		for _slot in range(max_slots):
+			var candidates := DatabaseManager.query_save(
+				"SELECT id, skills FROM population WHERE assigned_role IS NULL AND alive = 1;"
+			)
+			if candidates.size() == 0:
+				break
+
+			var best_id := ""
+			var best_match_count := -1
+			var tied_ids: Array = []
+
+			for candidate in candidates:
+				var person_skills: Array = JSON.parse_string(str(candidate["skills"]))
+				if person_skills == null:
+					person_skills = []
+
+				if required_skills.size() == 0:
+					# Any unassigned person qualifies
+					var match_count := 0
+					if match_count > best_match_count:
+						best_match_count = match_count
+						tied_ids = [candidate["id"]]
+					elif match_count == best_match_count:
+						tied_ids.append(candidate["id"])
+				else:
+					var match_count := 0
+					for req_skill in required_skills:
+						if req_skill in person_skills:
+							match_count += 1
+					if match_count > 0:
+						if match_count > best_match_count:
+							best_match_count = match_count
+							tied_ids = [candidate["id"]]
+						elif match_count == best_match_count:
+							tied_ids.append(candidate["id"])
+
+			if tied_ids.size() > 0:
+				best_id = tied_ids[randi() % tied_ids.size()]
+
+			if best_id != "":
+				DatabaseManager.execute_save(
+					"UPDATE population SET assigned_role = ? WHERE id = ?;",
+					[role_id, best_id]
+				)
+
+	# Step 8c — Calculate starting food_production from assigned farmers
+	var farmer_count_rows := DatabaseManager.query_save(
+		"SELECT COUNT(*) as n FROM population WHERE assigned_role = 'farmer' AND alive = 1;"
+	)
+	var farmer_count: int = int(farmer_count_rows[0]["n"])
+	var farmer_role_rows := DatabaseManager.query_library(
+		"SELECT stat_bonuses FROM roles WHERE id = 'farmer';"
+	)
+	var starting_food_production := 0.0
+	if farmer_role_rows.size() > 0:
+		var farmer_bonuses: Dictionary = JSON.parse_string(str(farmer_role_rows[0]["stat_bonuses"]))
+		if farmer_bonuses != null:
+			var farmer_bonus: float = float(farmer_bonuses.get("food_production", 0.5))
+			starting_food_production = farmer_count * farmer_bonus
+
 	# Step 9 — Write game_state
 	var starting_day_of_year: int = randi_range(1, 365)
 	var season := _calculate_season(starting_day_of_year, 30)
@@ -160,6 +236,16 @@ static func generate() -> Dictionary:
 	elif lowest_val < 45.0:
 		immediate_concern = "Your " + lowest_name + " needs attention"
 
+	var assigned_count_rows := DatabaseManager.query_save(
+		"SELECT COUNT(*) as n FROM population WHERE assigned_role IS NOT NULL AND alive = 1;"
+	)
+	var assigned_count: int = int(assigned_count_rows[0]["n"])
+	var role_line := ""
+	if assigned_count > 0:
+		role_line = str(assigned_count) + " people have already taken on essential roles."
+	else:
+		role_line = "Nobody has taken charge of anything yet."
+
 	var context := {
 		"apocalypse_opening": str(apocalypse["opening_text"]),
 		"origin_opening": str(origin["opening_text"]),
@@ -167,20 +253,21 @@ static func generate() -> Dictionary:
 		"population_count": str(pop_count),
 		"food_situation": food_situation,
 		"immediate_concern": immediate_concern,
+		"role_summary": role_line,
 	}
 
 	var opening_text := TemplateResolver.resolve(
 		"It has been 30 days since {apocalypse_opening}\n\n" +
 		"{origin_opening}\n\n" +
 		"{location_opening}\n\n" +
-		"You have {population_count} people. {food_situation}. {immediate_concern}.\n\n" +
+		"You have {population_count} people. {food_situation}. {immediate_concern}. {role_summary}\n\n" +
 		"What kind of leader will you be?",
 		context
 	)
 
 	DatabaseManager.execute_save(
-		"INSERT INTO game_state (id, game_day, starting_day_of_year, apocalypse_id, origin_id, location_id, season, food_production, difficulty_time_factor, opening_text, game_over, daily_health_pressure) VALUES (1, 30, ?, ?, ?, ?, ?, 0.0, 0.0, ?, 0, ?);",
-		[starting_day_of_year, apocalypse["id"], origin["id"], location["id"], season, opening_text, daily_health_pressure]
+		"INSERT INTO game_state (id, game_day, starting_day_of_year, apocalypse_id, origin_id, location_id, season, food_production, difficulty_time_factor, opening_text, game_over, daily_health_pressure) VALUES (1, 30, ?, ?, ?, ?, ?, ?, 0.0, ?, 0, ?);",
+		[starting_day_of_year, apocalypse["id"], origin["id"], location["id"], season, starting_food_production, opening_text, daily_health_pressure]
 	)
 
 	return { "opening_text": opening_text }
