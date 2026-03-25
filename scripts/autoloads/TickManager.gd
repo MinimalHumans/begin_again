@@ -161,6 +161,8 @@ func _run_tick() -> void:
 		var new_count := _get_living_count()
 		_write_log_entry(game_day, 1, "death",
 			"%s died on day %d. The community now numbers %d." % [death["name"], game_day, new_count])
+		# Handle grief for bonded characters
+		_handle_death_grief(death, game_day)
 
 	# Process departures
 	for departure in lifecycle["departures"]:
@@ -231,7 +233,10 @@ func _run_tick() -> void:
 		if randf() < (tier3_base_prob + crisis_pressure):
 			_attempt_fire_tier3(stats, pop_after, gs_for_sim)
 
-	# --- Step 5f: Generate stat warnings ---
+	# --- Step 5f: Update community ranks ---
+	CommunityIdentity.update_ranks()
+
+	# --- Step 5g: Generate stat warnings ---
 	_maybe_generate_stat_warning(game_day, stats)
 
 	# --- Step 6: Update season ---
@@ -384,6 +389,9 @@ func _fire_ambient_events(stats: Dictionary, population: Array, game_state: Dict
 			template_text, cast_actors, stats, game_state, structures, {}
 		)
 
+		# Apply community identity flavour
+		resolved = CommunityIdentity.apply_flavour(resolved, game_day)
+
 		# Write log entry
 		var category: String = str(selected_event.get("category", "ambient"))
 		var event_id: String = str(selected_event.get("id", ""))
@@ -411,6 +419,17 @@ func _fire_ambient_events(stats: Dictionary, population: Array, game_state: Dict
 				"UPDATE population SET last_mentioned = ?, mention_context = ? WHERE id = ?;",
 				[game_day, mention_ctx, pid]
 			)
+
+		# Organic bond formation when 2+ actors appear together
+		if cast_actors.size() >= 2:
+			var a_person = cast_actors.get("actor_1")
+			var b_person = cast_actors.get("actor_2")
+			if a_person is Dictionary and b_person is Dictionary:
+				var a_id: String = str(a_person.get("id", ""))
+				var b_id: String = str(b_person.get("id", ""))
+				if a_id != "" and b_id != "" and not RelationalSystem.has_bond(a_id, b_id):
+					if randf() < 0.08:
+						RelationalSystem.form_bond(a_id, b_id)
 
 		# Record cooldown
 		var cd_days = selected_event.get("cooldown_days", 0)
@@ -670,9 +689,10 @@ func _on_tier2_choice_made(
 			)
 
 	# --- 3. Execute the roll ---
+	var community_modifiers := CommunityIdentity.get_active_roll_modifiers()
 	var roll_result := RollEngine.roll(
 		choice, stats, cast_actors, game_state_snapshot,
-		_current_flags, _current_world_tags
+		_current_flags, _current_world_tags, community_modifiers
 	)
 	var outcome_tier: String = roll_result["outcome_tier"]
 	var outcome_score: float = roll_result["outcome_score"]
@@ -725,6 +745,9 @@ func _on_tier2_choice_made(
 				FlagSystem.clear_actor_flag(str(cast_actors["actor_2"].get("id", "")), fn.substr(8))
 			else:
 				FlagSystem.clear_flag(fn)
+
+	# --- 6b. Process relational outcomes ---
+	_apply_relational_outcomes(outcome, cast_actors)
 
 	# --- 7. Resolve outcome text ---
 	var outcome_text: String = str(outcome.get("text", "The outcome was unclear."))
@@ -1094,9 +1117,10 @@ func _on_tier3_choice_made(
 			)
 
 	# --- 3. Execute the roll ---
+	var t3_community_modifiers := CommunityIdentity.get_active_roll_modifiers()
 	var roll_result := RollEngine.roll(
 		choice, stats, cast_actors, game_state_snapshot,
-		_current_flags, _current_world_tags
+		_current_flags, _current_world_tags, t3_community_modifiers
 	)
 	var outcome_tier: String = roll_result["outcome_tier"]
 	var outcome_score: float = roll_result["outcome_score"]
@@ -1149,6 +1173,9 @@ func _on_tier3_choice_made(
 				FlagSystem.clear_actor_flag(str(cast_actors["actor_2"].get("id", "")), fn.substr(8))
 			else:
 				FlagSystem.clear_flag(fn)
+
+	# --- 6b. Process relational outcomes ---
+	_apply_relational_outcomes(outcome, cast_actors)
 
 	# --- 7. Resolve outcome text ---
 	var outcome_text: String = str(outcome.get("text", "The outcome was unclear."))
@@ -1488,9 +1515,10 @@ func _on_chain_stage_choice_made(
 
 	# --- 3. Execute the roll ---
 	var chain_memory := ChainSystem.get_memory(chain_id)
+	var chain_community_modifiers := CommunityIdentity.get_active_roll_modifiers()
 	var roll_result := RollEngine.roll(
 		choice, stats, cast_actors, game_state_snapshot,
-		_current_flags, _current_world_tags
+		_current_flags, _current_world_tags, chain_community_modifiers
 	)
 	var outcome_tier: String = roll_result["outcome_tier"]
 	var outcome_score: float = roll_result["outcome_score"]
@@ -1553,6 +1581,9 @@ func _on_chain_stage_choice_made(
 		"good": "It went reasonably well.",
 		"exceptional": "Better than expected."
 	}
+	# --- 6b. Process relational outcomes ---
+	_apply_relational_outcomes(outcome, cast_actors)
+
 	chain_memory["_outcome_label"] = outcome_labels.get(outcome_tier, "")
 	var resolved_outcome := TemplateResolver.resolve_event(
 		outcome_text, cast_actors, stats, game_state_snapshot, structures, chain_memory
@@ -1882,3 +1913,64 @@ func _load_recent_log_days(game_day: int) -> Array:
 		"SELECT * FROM event_log WHERE game_day >= ?;",
 		[game_day - 7]
 	)
+
+
+# ---------- Relational & Community Systems ----------
+
+func _apply_relational_outcomes(outcome: Dictionary, cast_actors: Dictionary) -> void:
+	# Process form_bond: ["actor_1", "actor_2"]
+	var bond_pair = outcome.get("form_bond", null)
+	if bond_pair is Array and bond_pair.size() >= 2:
+		var a_person = cast_actors.get(str(bond_pair[0]), {})
+		var b_person = cast_actors.get(str(bond_pair[1]), {})
+		if a_person is Dictionary and b_person is Dictionary:
+			var a_id: String = str(a_person.get("id", ""))
+			var b_id: String = str(b_person.get("id", ""))
+			if a_id != "" and b_id != "":
+				RelationalSystem.form_bond(a_id, b_id)
+
+	# Process form_grudge: ["holder", "target"]
+	var grudge_pair = outcome.get("form_grudge", null)
+	if grudge_pair is Array and grudge_pair.size() >= 2:
+		var holder = cast_actors.get(str(grudge_pair[0]), {})
+		var target = cast_actors.get(str(grudge_pair[1]), {})
+		if holder is Dictionary and target is Dictionary:
+			var h_id: String = str(holder.get("id", ""))
+			var t_id: String = str(target.get("id", ""))
+			if h_id != "" and t_id != "":
+				RelationalSystem.form_grudge(h_id, t_id)
+
+
+func _handle_death_grief(deceased: Dictionary, game_day: int) -> void:
+	var deceased_id: String = str(deceased.get("id", ""))
+	var deceased_name: String = str(deceased.get("name", "Someone"))
+	if deceased_id == "":
+		return
+	var bonds := RelationalSystem.get_bonds(deceased_id)
+	for bonded_id in bonds:
+		var grief_day: int = game_day + randi_range(1, 5)
+		_schedule_grief_hint(bonded_id, deceased_name, grief_day)
+
+
+func _schedule_grief_hint(griever_id: String, deceased_name: String, fire_day: int) -> void:
+	var hint_text := _pick_grief_template(deceased_name)
+	DatabaseManager.execute_save(
+		"INSERT INTO pending_deferred (source_event_id, source_choice_id, source_log_id, actor_ids, earliest_fire_day, latest_fire_day, check_config, outcomes, log_hints, fired) VALUES ('grief_hint', 'auto', 0, ?, ?, ?, '{}', '{}', ?, 0);",
+		[
+			JSON.stringify([griever_id]),
+			fire_day, fire_day + 3,
+			JSON.stringify([{"fire_day": fire_day, "text": hint_text, "fired": false}])
+		]
+	)
+
+
+static func _pick_grief_template(deceased_name: String) -> String:
+	var templates: Array[String] = [
+		"{actor_1} has been quiet since " + deceased_name + " died.",
+		"{actor_1} was seen sitting alone near {building}. Still thinking about " + deceased_name + ".",
+		"Someone left a small marker near where " + deceased_name + " used to sleep. Probably {actor_1}.",
+		"{actor_1} asked to be excused from work this morning. Nobody pressed them on why.",
+		"{actor_1} mentioned " + deceased_name + "'s name quietly, to no one in particular.",
+		"The grief is visible on {actor_1}. " + deceased_name + " mattered to them."
+	]
+	return templates[randi() % templates.size()]

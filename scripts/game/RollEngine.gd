@@ -8,7 +8,8 @@ static func roll(
 	actors: Dictionary,
 	game_state: Dictionary,
 	flags: Array,
-	world_tags: Array
+	world_tags: Array,
+	community_modifiers: Dictionary = {}
 ) -> Dictionary:
 	var roll_config: Dictionary = choice.get("roll", {})
 	if not (roll_config is Dictionary):
@@ -27,7 +28,9 @@ static func roll(
 			var stat_id: String = str(entry.get("stat", ""))
 			var weight: float = float(entry.get("weight", 0.0))
 			var stat_val: float = float(stats.get(stat_id, 50.0))
-			stat_bonus += (stat_val - 50.0) * weight * 0.02
+			var contribution: float = (stat_val - 50.0) * weight * 0.02
+			contribution += float(community_modifiers.get(stat_id, 0.0)) * weight
+			stat_bonus += contribution
 
 	# --- context_bonus ---
 	var context_bonus: float = 0.0
@@ -135,6 +138,23 @@ static func _evaluate_condition(
 			if parts.size() < 2:
 				return false
 			return parts[1] in world_tags
+
+		"actor_relationship":
+			if parts.size() < 3:
+				return false
+			var relationship_type: String = parts[1]
+			var other_role: String = parts[2]
+			var actor_a = actors.get("actor_1", {})
+			var actor_b = actors.get(other_role, {})
+			if actor_a is Dictionary and actor_b is Dictionary:
+				var id_a: String = str(actor_a.get("id", ""))
+				var id_b: String = str(actor_b.get("id", ""))
+				if id_a != "" and id_b != "":
+					if relationship_type == "close_to":
+						return RelationalSystem.has_bond(id_a, id_b)
+					elif relationship_type == "grudge_against":
+						return RelationalSystem.has_grudge(id_a, id_b)
+			return false
 
 	return false
 

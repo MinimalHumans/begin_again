@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(find /d/06_GitHub/Godot/begin_again -type f -name *.gd -o -name *.tscn)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git status:*)"
     ]
   }
 }

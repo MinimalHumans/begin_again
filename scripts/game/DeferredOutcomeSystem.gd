@@ -128,7 +128,8 @@ static func _resolve(
 		"outcomes": outcomes_json
 	}
 
-	var roll_result := RollEngine.roll(roll_input, stats, actors, game_state, flags, world_tags)
+	var community_modifiers := CommunityIdentity.get_active_roll_modifiers()
+	var roll_result := RollEngine.roll(roll_input, stats, actors, game_state, flags, world_tags, community_modifiers)
 	var outcome_tier: String = roll_result["outcome_tier"]
 
 	var outcome: Dictionary = outcomes_json.get(outcome_tier, {})

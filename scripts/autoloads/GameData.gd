@@ -3,6 +3,8 @@ extends Node
 var _skill_ids_cache: Array[String] = []
 var _events_cache: Array = []
 var _personality_cache: Dictionary = {}
+var _community_type_cache: Dictionary = {}
+var _community_types_cache: Array = []
 
 
 func _ready() -> void:
@@ -63,3 +65,22 @@ func get_stat(id: String) -> Dictionary:
 
 func get_all_roles() -> Array:
 	return DatabaseManager.query_library("SELECT * FROM roles;")
+
+
+func get_community_type(id: String) -> Dictionary:
+	if _community_type_cache.has(id):
+		return _community_type_cache[id]
+	var rows := DatabaseManager.query_library(
+		"SELECT * FROM community_types WHERE id = ?;", [id]
+	)
+	if rows.size() > 0:
+		_community_type_cache[id] = rows[0]
+		return rows[0]
+	return {}
+
+
+func get_all_community_types() -> Array:
+	if _community_types_cache.size() > 0:
+		return _community_types_cache
+	_community_types_cache = DatabaseManager.query_library("SELECT * FROM community_types;")
+	return _community_types_cache

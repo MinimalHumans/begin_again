@@ -11,7 +11,8 @@ static func is_eligible(
 	population: Array,
 	game_day: int,
 	cooldowns: Array,
-	occurrence_counts: Dictionary
+	occurrence_counts: Dictionary,
+	cast_actors: Dictionary = {}
 ) -> bool:
 	# Parse eligibility JSON
 	var elig_raw = event.get("eligibility")
@@ -105,6 +106,42 @@ static func is_eligible(
 	if elig.has("requires_actor") and elig["requires_actor"] == true:
 		if population.size() == 0:
 			return false
+
+	# --- required_actor_relationship ---
+	if elig.has("required_actor_relationship") and elig["required_actor_relationship"] is Dictionary:
+		var rel_reqs: Dictionary = elig["required_actor_relationship"]
+		if not cast_actors.is_empty():
+			for rel_key in rel_reqs:
+				# Parse keys like "actor_1_close_to_actor_2" or "actor_1_grudge_against_actor_2"
+				var actor_a_id: String = ""
+				var actor_b_id: String = ""
+				var rel_type: String = ""
+				var rel_parts: PackedStringArray
+				if "_close_to_" in rel_key:
+					rel_parts = rel_key.split("_close_to_")
+					var a_person = cast_actors.get(rel_parts[0], {})
+					var b_person = cast_actors.get(rel_parts[1], {})
+					if a_person is Dictionary and b_person is Dictionary:
+						actor_a_id = str(a_person.get("id", ""))
+						actor_b_id = str(b_person.get("id", ""))
+					rel_type = "close_to"
+				elif "_grudge_against_" in rel_key:
+					rel_parts = rel_key.split("_grudge_against_")
+					var a_person = cast_actors.get(rel_parts[0], {})
+					var b_person = cast_actors.get(rel_parts[1], {})
+					if a_person is Dictionary and b_person is Dictionary:
+						actor_a_id = str(a_person.get("id", ""))
+						actor_b_id = str(b_person.get("id", ""))
+					rel_type = "grudge_against"
+				if actor_a_id != "" and actor_b_id != "":
+					var required: bool = bool(rel_reqs[rel_key])
+					var has_rel: bool = false
+					if rel_type == "close_to":
+						has_rel = RelationalSystem.has_bond(actor_a_id, actor_b_id)
+					elif rel_type == "grudge_against":
+						has_rel = RelationalSystem.has_grudge(actor_a_id, actor_b_id)
+					if has_rel != required:
+						return false
 
 	# --- Cooldown and occurrence checks ---
 	return _check_cooldowns_and_occurrences(event, game_day, cooldowns, occurrence_counts)
