@@ -219,6 +219,18 @@ func _run_tick() -> void:
 		if randf() < tier2_base_prob:
 			_attempt_fire_tier2(stats, pop_after, gs_for_sim)
 
+	# --- Step 5e2: Attempt Tier 3 crisis event ---
+	if not _popup_active:
+		var tier3_base_prob: float = 0.003
+		var crisis_pressure: float = 0.0
+		for stat_id in ["food", "health", "security", "morale", "cohesion"]:
+			if _current_state_tags.has(stat_id + "_critical"):
+				crisis_pressure += 0.002
+			elif _current_state_tags.has(stat_id + "_low"):
+				crisis_pressure += 0.001
+		if randf() < (tier3_base_prob + crisis_pressure):
+			_attempt_fire_tier3(stats, pop_after, gs_for_sim)
+
 	# --- Step 5f: Generate stat warnings ---
 	_maybe_generate_stat_warning(game_day, stats)
 
@@ -813,6 +825,45 @@ func _on_tier2_choice_made(
 	elif event_chain_id != null and str(event_chain_id) != "" and str(event_chain_id) != "null":
 		ChainSystem.end_chain(str(event_chain_id))
 
+	# --- 8d. Escalation check ---
+	var escalates_to = outcome.get("escalates_to", null)
+	if escalates_to != null and str(escalates_to) != "" and str(escalates_to) != "null":
+		# Notify UI first so tier 2 result is visible before crisis fires
+		log_entry_added.emit(entry)
+		if _ui_event_log:
+			_ui_event_log.append_entry(entry)
+		if _ui_stats_panel:
+			_ui_stats_panel.refresh()
+		# Fire the escalated Tier 3 crisis immediately
+		_fire_escalated_tier3(str(escalates_to), cast_actors, stats, game_state_snapshot)
+		# Record cooldown + occurrence for the tier 2 event, then return
+		var cd_esc = event.get("cooldown_days", 0)
+		if cd_esc != null and int(cd_esc) > 0:
+			DatabaseManager.execute_save(
+				"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (?, NULL, ?);",
+				[event_id, game_day + int(cd_esc)]
+			)
+		var excl_esc = event.get("exclusion_group")
+		if excl_esc != null and str(excl_esc) != "":
+			DatabaseManager.execute_save(
+				"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (NULL, ?, ?);",
+				[str(excl_esc), game_day + int(event.get("cooldown_days", 7))]
+			)
+		var prev_esc: int = _current_occurrence_counts.get(event_id, 0)
+		DatabaseManager.execute_save(
+			"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
+			[event_id, prev_esc + 1]
+		)
+		for actor_key in cast_actors:
+			var person: Dictionary = cast_actors[actor_key]
+			var pid: String = str(person.get("id", ""))
+			var mention_ctx := _get_mention_context(category, structures, game_day)
+			DatabaseManager.execute_save(
+				"UPDATE population SET last_mentioned = ?, mention_context = ? WHERE id = ?;",
+				[game_day, mention_ctx, pid]
+			)
+		return
+
 	# --- 9. Record cooldown ---
 	var cd_days = event.get("cooldown_days", 0)
 	if cd_days != null and int(cd_days) > 0:
@@ -840,6 +891,387 @@ func _on_tier2_choice_made(
 		var person: Dictionary = cast_actors[actor_key]
 		var pid: String = str(person.get("id", ""))
 		var mention_ctx := _get_mention_context(category, loc_structures, game_day)
+		DatabaseManager.execute_save(
+			"UPDATE population SET last_mentioned = ?, mention_context = ? WHERE id = ?;",
+			[game_day, mention_ctx, pid]
+		)
+
+	# --- 12. Notify UI ---
+	log_entry_added.emit(entry)
+	if _ui_event_log:
+		_ui_event_log.append_entry(entry)
+	if _ui_stats_panel:
+		_ui_stats_panel.refresh()
+
+	# --- 13. Done — leave paused ---
+	_popup_active = false
+
+
+# ---------- Tier 3 Crisis Event Firing ----------
+
+func _attempt_fire_tier3(stats: Dictionary, population: Array, game_state: Dictionary) -> void:
+	var game_day: int = int(game_state.get("game_day", _current_game_day))
+
+	var all_events := GameData.get_all_events()
+	var eligible_pool: Array = []
+	for ev in all_events:
+		if int(ev.get("tier", 0)) != 3:
+			continue
+		var ev_chain_id = ev.get("chain_id", null)
+		if ev_chain_id != null and str(ev_chain_id) != "" and str(ev_chain_id) != "null":
+			continue
+		if EligibilityEngine.is_eligible(
+			ev, _current_world_tags, _current_state_tags, stats,
+			_current_flags, population, game_day,
+			_current_cooldowns, _current_occurrence_counts
+		):
+			eligible_pool.append(ev)
+
+	if eligible_pool.size() == 0:
+		return
+
+	var selected_event: Dictionary = {}
+	var cast_actors: Dictionary = {}
+	var attempts := 0
+	while attempts < 4 and eligible_pool.size() > 0:
+		var candidate: Dictionary = _weighted_select_event(eligible_pool)
+		if candidate.is_empty():
+			break
+		var req_raw = candidate.get("actor_requirements")
+		if req_raw == null or str(req_raw).strip_edges() == "" or str(req_raw).strip_edges() == "null":
+			selected_event = candidate
+			cast_actors = {}
+			break
+		else:
+			var result := ActorCaster.cast(candidate, population, game_day)
+			if not result.is_empty():
+				selected_event = candidate
+				cast_actors = result
+				break
+			else:
+				eligible_pool.erase(candidate)
+				attempts += 1
+
+	if selected_event.is_empty():
+		return
+
+	_show_crisis_popup(selected_event, cast_actors, stats, game_state)
+
+
+func _fire_escalated_tier3(
+	event_id: String,
+	inherited_actors: Dictionary,
+	stats: Dictionary,
+	game_state: Dictionary
+) -> void:
+	var rows := DatabaseManager.query_library(
+		"SELECT * FROM events WHERE id = ?;", [event_id]
+	)
+	if rows.size() == 0:
+		push_warning("Escalation target not found: " + event_id)
+		_popup_active = false
+		return
+
+	var event: Dictionary = rows[0]
+	_show_crisis_popup(event, inherited_actors, stats, game_state)
+
+
+func _show_crisis_popup(
+	event: Dictionary,
+	cast_actors: Dictionary,
+	stats: Dictionary,
+	game_state: Dictionary
+) -> void:
+	var location_id: String = str(game_state.get("location_id", ""))
+	var structures: Array = _get_location_structures(location_id)
+
+	var desc_template: String = str(event.get("description_template", ""))
+	var resolved_desc := TemplateResolver.resolve_event(
+		desc_template, cast_actors, stats, game_state, structures, {}
+	)
+
+	var choices_raw = event.get("choices")
+	var parsed_choices: Array = []
+	if choices_raw != null:
+		var parsed = JSON.parse_string(str(choices_raw))
+		if parsed is Array:
+			parsed_choices = parsed
+
+	if parsed_choices.size() == 0:
+		return
+
+	var all_stat_ids: Dictionary = {}
+	for i in range(parsed_choices.size()):
+		var choice: Dictionary = parsed_choices[i]
+		var text_tmpl: String = str(choice.get("text_template", "Choose"))
+		choice["_resolved_text"] = TemplateResolver.resolve_event(
+			text_tmpl, cast_actors, stats, game_state, structures, {}
+		)
+		var roll_cfg = choice.get("roll", {})
+		if roll_cfg is Dictionary:
+			var rs = roll_cfg.get("relevant_stats", [])
+			if rs is Array:
+				for entry in rs:
+					if entry is Dictionary:
+						all_stat_ids[str(entry.get("stat", ""))] = true
+
+	var relevant_names: Array = []
+	for stat_id in all_stat_ids:
+		var sdef: Dictionary = GameData.get_stat(stat_id)
+		if not sdef.is_empty():
+			relevant_names.append(str(sdef.get("display_name", stat_id)))
+
+	set_speed(0)
+	_popup_active = true
+
+	var popup: CanvasLayer = preload("res://scenes/ui/CrisisPopup.tscn").instantiate()
+	get_tree().root.add_child(popup)
+	popup.present(event, resolved_desc, parsed_choices, relevant_names)
+	popup.choice_made.connect(
+		_on_tier3_choice_made.bind(
+			event, cast_actors, parsed_choices,
+			game_state.duplicate(), stats.duplicate(), structures
+		)
+	)
+
+
+func _on_tier3_choice_made(
+	choice_index: int,
+	event: Dictionary,
+	cast_actors: Dictionary,
+	parsed_choices: Array,
+	game_state_snapshot: Dictionary,
+	stats_snapshot: Dictionary,
+	structures: Array
+) -> void:
+	if choice_index < 0 or choice_index >= parsed_choices.size():
+		_popup_active = false
+		return
+
+	var choice: Dictionary = parsed_choices[choice_index]
+	var game_day: int = int(game_state_snapshot.get("game_day", _current_game_day))
+
+	# Re-load current stats from DB
+	var stat_rows := DatabaseManager.query_save("SELECT stat_id, value FROM current_stats;")
+	var stats: Dictionary = {}
+	for row in stat_rows:
+		stats[row["stat_id"]] = float(row["value"])
+
+	if _stat_defs.is_empty():
+		var all_stats := GameData.get_all_stats()
+		for s in all_stats:
+			_stat_defs[s["id"]] = s
+
+	var stability_factor: float = 0.5 + (float(stats.get("stability", 50.0)) / 100.0) * 0.5
+	var all_deltas: Dictionary = {}
+
+	# --- 1. Apply immediate effects ---
+	var imm_effects = choice.get("immediate_effects", {})
+	if imm_effects is Dictionary:
+		for stat_id in imm_effects:
+			var delta: float = float(imm_effects[stat_id])
+			if delta > 0:
+				delta *= stability_factor
+			var new_val: float = float(stats.get(stat_id, 0.0)) + delta
+			if _stat_defs.has(stat_id):
+				var sdef: Dictionary = _stat_defs[stat_id]
+				new_val = clampf(new_val, float(sdef["min_value"]), float(sdef["max_value"]))
+			stats[stat_id] = new_val
+			DatabaseManager.execute_save(
+				"UPDATE current_stats SET value = ? WHERE stat_id = ?;",
+				[new_val, stat_id]
+			)
+			all_deltas[stat_id] = all_deltas.get(stat_id, 0.0) + float(imm_effects[stat_id])
+
+	# --- 2. Apply community scores ---
+	var comm_scores = choice.get("community_scores", {})
+	if comm_scores is Dictionary:
+		for type_id in comm_scores:
+			var pts: float = float(comm_scores[type_id])
+			DatabaseManager.execute_save(
+				"UPDATE community_scores SET score = score + ? WHERE type_id = ?;",
+				[pts, type_id]
+			)
+
+	# --- 3. Execute the roll ---
+	var roll_result := RollEngine.roll(
+		choice, stats, cast_actors, game_state_snapshot,
+		_current_flags, _current_world_tags
+	)
+	var outcome_tier: String = roll_result["outcome_tier"]
+	var outcome_score: float = roll_result["outcome_score"]
+
+	# --- 4. Get outcome ---
+	var outcomes = choice.get("outcomes", {})
+	if not (outcomes is Dictionary):
+		outcomes = {}
+	var outcome: Dictionary = outcomes.get(outcome_tier, {})
+	if not (outcome is Dictionary):
+		outcome = {}
+
+	# --- 5. Apply outcome effects ---
+	var outcome_effects = outcome.get("effects", {})
+	if outcome_effects is Dictionary:
+		for stat_id in outcome_effects:
+			var delta: float = float(outcome_effects[stat_id])
+			if delta > 0:
+				delta *= stability_factor
+			var new_val: float = float(stats.get(stat_id, 0.0)) + delta
+			if _stat_defs.has(stat_id):
+				var sdef: Dictionary = _stat_defs[stat_id]
+				new_val = clampf(new_val, float(sdef["min_value"]), float(sdef["max_value"]))
+			stats[stat_id] = new_val
+			DatabaseManager.execute_save(
+				"UPDATE current_stats SET value = ? WHERE stat_id = ?;",
+				[new_val, stat_id]
+			)
+			all_deltas[stat_id] = all_deltas.get(stat_id, 0.0) + float(outcome_effects[stat_id])
+
+	# --- 6. Set/clear flags ---
+	var flags_set = outcome.get("flags_set", [])
+	if flags_set is Array:
+		for flag_name in flags_set:
+			var fn: String = str(flag_name)
+			if fn.begins_with("actor_1:") and cast_actors.has("actor_1"):
+				FlagSystem.set_actor_flag(str(cast_actors["actor_1"].get("id", "")), fn.substr(8))
+			elif fn.begins_with("actor_2:") and cast_actors.has("actor_2"):
+				FlagSystem.set_actor_flag(str(cast_actors["actor_2"].get("id", "")), fn.substr(8))
+			else:
+				FlagSystem.set_flag(fn, game_day)
+
+	var flags_cleared = outcome.get("flags_cleared", [])
+	if flags_cleared is Array:
+		for flag_name in flags_cleared:
+			var fn: String = str(flag_name)
+			if fn.begins_with("actor_1:") and cast_actors.has("actor_1"):
+				FlagSystem.clear_actor_flag(str(cast_actors["actor_1"].get("id", "")), fn.substr(8))
+			elif fn.begins_with("actor_2:") and cast_actors.has("actor_2"):
+				FlagSystem.clear_actor_flag(str(cast_actors["actor_2"].get("id", "")), fn.substr(8))
+			else:
+				FlagSystem.clear_flag(fn)
+
+	# --- 7. Resolve outcome text ---
+	var outcome_text: String = str(outcome.get("text", "The outcome was unclear."))
+	var outcome_labels := {
+		"catastrophic": "Everything went wrong.",
+		"bad": "It didn't go well.",
+		"mixed": "Results were mixed.",
+		"good": "It went reasonably well.",
+		"exceptional": "Better than expected."
+	}
+	var chain_mem := {"_outcome_label": outcome_labels.get(outcome_tier, "")}
+	var resolved_outcome := TemplateResolver.resolve_event(
+		outcome_text, cast_actors, stats, game_state_snapshot, structures, chain_mem
+	)
+
+	var choice_text: String = str(choice.get("_resolved_text", choice.get("text_template", "")))
+	var display_text: String = "You chose: " + choice_text + "\n\n" + resolved_outcome
+
+	var changes_parts: Array = []
+	for stat_id in all_deltas:
+		var d: float = all_deltas[stat_id]
+		if absf(d) < 0.01:
+			continue
+		var sdef: Dictionary = _stat_defs.get(stat_id, {})
+		var stat_name: String = str(sdef.get("display_name", stat_id))
+		if d > 0:
+			changes_parts.append(stat_name + " +" + str(int(d)))
+		else:
+			changes_parts.append(stat_name + " " + str(int(d)))
+	if changes_parts.size() > 0:
+		display_text += "\n[" + ", ".join(changes_parts) + "]"
+
+	# --- 8. Write to event_log with is_major = 1 ---
+	var event_id: String = str(event.get("id", ""))
+	var category: String = str(event.get("category", "crisis"))
+	var choice_id: String = str(choice.get("id", ""))
+	DatabaseManager.execute_save(
+		"INSERT INTO event_log (game_day, tier, event_id, category, display_text, choice_made, outcome_tier, outcome_score, stat_changes, is_highlighted, is_major) VALUES (?, 3, ?, ?, ?, ?, ?, ?, ?, 1, 1);",
+		[game_day, event_id, category, display_text, choice_id, outcome_tier, outcome_score, JSON.stringify(all_deltas)]
+	)
+
+	var written_log_id: int = 0
+	var rowid_rows := DatabaseManager.query_save("SELECT last_insert_rowid() AS id;")
+	if rowid_rows.size() > 0:
+		written_log_id = int(rowid_rows[0].get("id", 0))
+
+	var entry := {
+		"game_day": game_day,
+		"tier": 3,
+		"category": category,
+		"display_text": display_text,
+		"is_highlighted": 1,
+		"is_major": 1
+	}
+
+	# --- 8b. Schedule deferred outcome if present ---
+	if choice.has("deferred") and choice.get("deferred") != null:
+		var deferred_block = choice.get("deferred")
+		if deferred_block is Dictionary:
+			var actor_id_list: Array = []
+			for actor_key in cast_actors:
+				var person: Dictionary = cast_actors[actor_key]
+				actor_id_list.append(str(person.get("id", "")))
+			DeferredOutcomeSystem.schedule(
+				event_id, choice_id, written_log_id,
+				actor_id_list, deferred_block, game_day
+			)
+
+	# --- 8c. Chain triggers ---
+	var chain_to = outcome.get("chain_to", null)
+	if chain_to != null and str(chain_to) != "" and str(chain_to) != "null":
+		var chain_initial_mem = outcome.get("chain_memory_write", {})
+		if not (chain_initial_mem is Dictionary):
+			chain_initial_mem = {}
+		for mem_key in chain_initial_mem:
+			var mem_val: String = str(chain_initial_mem[mem_key])
+			for actor_key in cast_actors:
+				mem_val = mem_val.replace("{" + actor_key + "}", str(cast_actors[actor_key].get("name", "")))
+			chain_initial_mem[mem_key] = mem_val
+		ChainSystem.start_chain(str(chain_to), str(chain_to) + "_1", game_day, chain_initial_mem)
+
+	var next_stage_id = outcome.get("next_stage_id", null)
+	var event_chain_id = event.get("chain_id", null)
+	if next_stage_id != null and str(next_stage_id) != "" and str(next_stage_id) != "null":
+		var memory_writes = outcome.get("chain_memory_write", {})
+		if not (memory_writes is Dictionary):
+			memory_writes = {}
+		for mem_key in memory_writes:
+			var mem_val: String = str(memory_writes[mem_key])
+			for actor_key in cast_actors:
+				mem_val = mem_val.replace("{" + actor_key + "}", str(cast_actors[actor_key].get("name", "")))
+			memory_writes[mem_key] = mem_val
+		if event_chain_id != null and str(event_chain_id) != "" and str(event_chain_id) != "null":
+			ChainSystem.advance_chain(str(event_chain_id), str(next_stage_id), memory_writes, game_day)
+	elif event_chain_id != null and str(event_chain_id) != "" and str(event_chain_id) != "null":
+		ChainSystem.end_chain(str(event_chain_id))
+
+	# --- 9. Record cooldown ---
+	var cd_days = event.get("cooldown_days", 0)
+	if cd_days != null and int(cd_days) > 0:
+		DatabaseManager.execute_save(
+			"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (?, NULL, ?);",
+			[event_id, game_day + int(cd_days)]
+		)
+	var excl = event.get("exclusion_group")
+	if excl != null and str(excl) != "":
+		DatabaseManager.execute_save(
+			"INSERT INTO cooldowns (event_id, exclusion_group, expires_day) VALUES (NULL, ?, ?);",
+			[str(excl), game_day + int(event.get("cooldown_days", 7))]
+		)
+
+	# --- 10. Increment occurrence count ---
+	var prev_count: int = _current_occurrence_counts.get(event_id, 0)
+	DatabaseManager.execute_save(
+		"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
+		[event_id, prev_count + 1]
+	)
+
+	# --- 11. Update actor last_mentioned ---
+	for actor_key in cast_actors:
+		var person: Dictionary = cast_actors[actor_key]
+		var pid: String = str(person.get("id", ""))
+		var mention_ctx := _get_mention_context(category, structures, game_day)
 		DatabaseManager.execute_save(
 			"UPDATE population SET last_mentioned = ?, mention_context = ? WHERE id = ?;",
 			[game_day, mention_ctx, pid]
