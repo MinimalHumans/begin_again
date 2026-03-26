@@ -4,7 +4,8 @@
       "Bash(find /d/06_GitHub/Godot/begin_again -type f -name *.gd -o -name *.tscn)",
       "Bash(python3:*)",
       "Bash(git status:*)",
-      "Bash(wc -l /d/06_GitHub/Godot/begin_again/scripts/game/*.gd /d/06_GitHub/Godot/begin_again/scripts/simulation/*.gd)"
+      "Bash(wc -l /d/06_GitHub/Godot/begin_again/scripts/game/*.gd /d/06_GitHub/Godot/begin_again/scripts/simulation/*.gd)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

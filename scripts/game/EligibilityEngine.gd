@@ -143,6 +143,17 @@ static func is_eligible(
 					if has_rel != required:
 						return false
 
+	# --- community_score_above ---
+	var community_score_above = elig.get("community_score_above", null)
+	if community_score_above != null and community_score_above is Dictionary:
+		for type_id in community_score_above:
+			var threshold: float = float(community_score_above[type_id])
+			var rows := DatabaseManager.query_save(
+				"SELECT score FROM community_scores WHERE type_id = ?", [type_id]
+			)
+			if rows.is_empty() or float(rows[0].get("score", 0)) <= threshold:
+				return false
+
 	# --- Cooldown and occurrence checks ---
 	return _check_cooldowns_and_occurrences(event, game_day, cooldowns, occurrence_counts)
 

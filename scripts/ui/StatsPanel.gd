@@ -12,6 +12,7 @@ const COL_BAR_BG := Color("#333333")
 
 signal new_game_requested
 signal roster_requested
+signal stat_detail_requested(stat_id: String)
 
 var _stat_rows: Dictionary = {}  # stat_id -> { bar_fill, value_label, stat_def }
 var _day_season_label: Label
@@ -178,15 +179,27 @@ func _get_threshold_colour(stat_def: Dictionary, value: float, population: float
 	return COL_GREEN_OK
 
 
+func _on_stat_clicked(stat_id: String) -> void:
+	stat_detail_requested.emit(stat_id)
+
+
 func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	var sid: String = stat_def["id"]
+	row.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_on_stat_clicked(sid)
+	)
+	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 	var name_label := Label.new()
 	name_label.text = stat_def["display_name"]
 	name_label.custom_minimum_size.x = 110
 	name_label.add_theme_color_override("font_color", COL_TEXT_DIM)
 	name_label.add_theme_font_size_override("font_size", 13)
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_label)
 
 	var fmt: String = stat_def["format_type"]
@@ -198,6 +211,7 @@ func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 		track.color = COL_BAR_BG
 		track.custom_minimum_size.y = 12
 		track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(track)
 
 		# Bar fill (child of track)
@@ -206,6 +220,7 @@ func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 		fill.custom_minimum_size.y = 12
 		fill.custom_minimum_size.x = 0
 		fill.position = Vector2.ZERO
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		track.add_child(fill)
 
 		# Value label
@@ -215,6 +230,7 @@ func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 		val_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		val_label.add_theme_color_override("font_color", COL_TEXT_DIM)
 		val_label.add_theme_font_size_override("font_size", 11)
+		val_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(val_label)
 
 		_stat_rows[stat_id] = { "bar_track": track, "bar_fill": fill, "value_label": val_label, "stat_def": stat_def }
@@ -226,6 +242,7 @@ func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 		val_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		val_label.add_theme_color_override("font_color", COL_TEXT_PRIMARY)
 		val_label.add_theme_font_size_override("font_size", 16)
+		val_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(val_label)
 
 		_stat_rows[stat_id] = { "value_label": val_label, "stat_def": stat_def }
@@ -237,6 +254,7 @@ func _create_stat_row(stat_def: Dictionary) -> HBoxContainer:
 		val_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		val_label.add_theme_color_override("font_color", COL_TEXT_PRIMARY)
 		val_label.add_theme_font_size_override("font_size", 14)
+		val_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(val_label)
 
 		_stat_rows[stat_id] = { "value_label": val_label, "stat_def": stat_def }
