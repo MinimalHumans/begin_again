@@ -44,6 +44,7 @@ func _ready() -> void:
 
 
 func start_new_game() -> void:
+	EndingSystem.abort()
 	# Stop any running simulation
 	TickManager.set_speed(0)
 	TickManager._game_over = false

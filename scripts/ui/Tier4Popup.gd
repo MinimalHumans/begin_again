@@ -166,7 +166,13 @@ func present(
 	# Get current game day for the day label
 	var gs_rows := DatabaseManager.query_save("SELECT game_day FROM game_state WHERE id = 1;")
 	if gs_rows.size() > 0:
-		_day_label.text = "Day %d" % int(gs_rows[0].get("game_day", 0))
+		var raw_day: int = int(gs_rows[0].get("game_day", 0))
+		if raw_day < 365:
+			_day_label.text = "Day %d" % raw_day
+		else:
+			var year := (raw_day / 365) + 1
+			var doy := raw_day % 365
+			_day_label.text = "Year %d, Day %d" % [year, doy]
 	else:
 		_day_label.text = ""
 

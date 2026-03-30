@@ -26,6 +26,11 @@ static func run_tick(
 	var resource_bonus: float = float(role_bonuses.get("resources", 0.0))
 	delta["resources"] = resource_bonus - resource_drain
 
+	# If resources are at or near zero, food production suffers (tools failing)
+	var resource_val: float = float(stats.get("resources", 0.0))
+	if resource_val <= 5.0:
+		delta["food"] = delta.get("food", 0.0) - (population * float(config.get("FOOD_DRAIN_PER_PERSON", 0.14)) * 0.3)
+
 	# --- Health ---
 	var medic_bonus: float = float(role_bonuses.get("health", 0.0))
 	var daily_health_pressure: float = float(game_state.get("daily_health_pressure", 0.0))

@@ -104,7 +104,14 @@ func refresh() -> void:
 	# Update day/season
 	var gs := DatabaseManager.query_save("SELECT game_day, season FROM game_state WHERE id = 1;")
 	if gs.size() > 0:
-		var day_text := "Day %d" % gs[0]["game_day"]
+		var raw_day: int = gs[0]["game_day"]
+		var day_text: String
+		if raw_day < 365:
+			day_text = "Day %d" % raw_day
+		else:
+			var year: int = (raw_day / 365) + 1
+			var day_of_year: int = raw_day % 365
+			day_text = "Year %d, Day %d" % [year, day_of_year]
 		var season_text: String = gs[0]["season"]
 		season_text = season_text.capitalize()
 		_day_season_label.text = day_text + "\n" + season_text

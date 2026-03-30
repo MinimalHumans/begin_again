@@ -34,10 +34,11 @@ func _ready() -> void:
 func load_from_db() -> void:
 	clear()
 	var entries := DatabaseManager.query_save(
-		"SELECT game_day, tier, display_text FROM event_log ORDER BY id ASC;"
+		"SELECT game_day, tier, display_text FROM event_log ORDER BY id DESC LIMIT 200;"
 	)
-	if entries.size() == 0:
-		# Placeholder entry
+	# Reverse so oldest is at top
+	entries.reverse()
+	if entries.is_empty():
 		append_entry({
 			"game_day": 30,
 			"tier": 1,

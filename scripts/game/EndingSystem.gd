@@ -21,6 +21,17 @@ static func register(scene_root: Node, event_log: Node) -> void:
 	_ui_event_log = event_log
 
 
+static func abort() -> void:
+	if _epilogue_timer != null and is_instance_valid(_epilogue_timer):
+		_epilogue_timer.stop()
+		_epilogue_timer.queue_free()
+		_epilogue_timer = null
+	_epilogue_entries = []
+	_epilogue_index = 0
+	_end_reason = ""
+	_is_coda = false
+
+
 # ---------- Epilogue Entry Point ----------
 
 static func begin_epilogue(
@@ -221,6 +232,9 @@ static func _get_coda_entries() -> Array:
 # ---------- Ending Screen ----------
 
 static func show_ending_screen() -> void:
+	if _scene_root == null:
+		push_error("EndingSystem: scene root not registered")
+		return
 	var dominant := CommunityIdentity.get_dominant_type()
 	var secondary := CommunityIdentity.get_secondary_type()
 	var dominant_type_row: Dictionary = {}

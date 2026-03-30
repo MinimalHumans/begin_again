@@ -26,8 +26,14 @@ var _current_game_day: int = 0
 # Phase 2c: Tier 2 popup state
 var _popup_active: bool = false
 
+# Performance: dirty flag for occurrence counts
+var _occurrence_counts_dirty: bool = true
+
 # Game over state
 var _game_over: bool = false
+
+# Warning cooldowns — cooldown_key -> last_fired_game_day
+var _warning_cooldowns: Dictionary = {}
 
 # Phase 3b: Chain stage queue — process one per tick
 var _pending_chain_stages: Array = []
@@ -222,7 +228,15 @@ func _run_tick() -> void:
 
 	# --- Step 5e: Attempt Tier 2 decision event ---
 	if not _popup_active:
-		var tier2_base_prob: float = 0.03
+		# Early game: higher frequency. Late game: taper off.
+		var tier2_base_prob: float
+		var game_day_f: float = float(game_day)
+		if game_day_f < 90:
+			tier2_base_prob = 0.07
+		elif game_day_f < 365:
+			tier2_base_prob = 0.04
+		else:
+			tier2_base_prob = 0.025
 		if randf() < tier2_base_prob:
 			_attempt_fire_tier2(stats, pop_after, gs_for_sim)
 
@@ -305,6 +319,13 @@ func _run_tick() -> void:
 		[game_day]
 	)
 
+	# Every 30 days, purge expired cooldowns to keep the table small
+	if game_day % 30 == 0:
+		DatabaseManager.execute_save(
+			"DELETE FROM cooldowns WHERE expires_day < ?;",
+			[game_day - 1]
+		)
+
 	# --- Step 12: Notify UI ---
 	day_advanced.emit(game_day, new_season)
 	if _ui_stats_panel:
@@ -326,14 +347,14 @@ func _fire_ambient_events(stats: Dictionary, population: Array, game_state: Dict
 
 	var game_day: int = int(game_state.get("game_day", _current_game_day))
 
-	# Roll event count: 0 (15%), 1 (45%), 2 (30%), 3 (10%)
+	# Roll event count: 0 (50%), 1 (35%), 2 (12%), 3 (3%)
 	var r := randf()
 	var event_count: int
-	if r < 0.15:
+	if r < 0.50:
 		event_count = 0
-	elif r < 0.60:
+	elif r < 0.85:
 		event_count = 1
-	elif r < 0.90:
+	elif r < 0.97:
 		event_count = 2
 	else:
 		event_count = 3
@@ -771,16 +792,14 @@ func _on_tier2_choice_made(
 
 	# Stat change summary
 	var changes_parts: Array = []
+	var current_pop: float = float(stats.get("population", 1))
 	for stat_id in all_deltas:
 		var d: float = all_deltas[stat_id]
 		if absf(d) < 0.01:
 			continue
-		var sdef: Dictionary = _stat_defs.get(stat_id, {})
-		var stat_name: String = str(sdef.get("display_name", stat_id))
-		if d > 0:
-			changes_parts.append(stat_name + " +" + str(int(d)))
-		else:
-			changes_parts.append(stat_name + " " + str(int(d)))
+		var formatted := _format_stat_delta(stat_id, d, current_pop)
+		if formatted != "":
+			changes_parts.append(formatted)
 	if changes_parts.size() > 0:
 		display_text += "\n[" + ", ".join(changes_parts) + "]"
 
@@ -880,6 +899,7 @@ func _on_tier2_choice_made(
 			"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
 			[event_id, prev_esc + 1]
 		)
+		_occurrence_counts_dirty = true
 		for actor_key in cast_actors:
 			var person: Dictionary = cast_actors[actor_key]
 			var pid: String = str(person.get("id", ""))
@@ -910,6 +930,7 @@ func _on_tier2_choice_made(
 		"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
 		[event_id, prev_count + 1]
 	)
+	_occurrence_counts_dirty = true
 
 	# --- 11. Update actor last_mentioned ---
 	var loc_structures: Array = structures
@@ -1203,16 +1224,14 @@ func _on_tier3_choice_made(
 	var display_text: String = "You chose: " + choice_text + "\n\n" + resolved_outcome
 
 	var changes_parts: Array = []
+	var current_pop: float = float(stats.get("population", 1))
 	for stat_id in all_deltas:
 		var d: float = all_deltas[stat_id]
 		if absf(d) < 0.01:
 			continue
-		var sdef: Dictionary = _stat_defs.get(stat_id, {})
-		var stat_name: String = str(sdef.get("display_name", stat_id))
-		if d > 0:
-			changes_parts.append(stat_name + " +" + str(int(d)))
-		else:
-			changes_parts.append(stat_name + " " + str(int(d)))
+		var formatted := _format_stat_delta(stat_id, d, current_pop)
+		if formatted != "":
+			changes_parts.append(formatted)
 	if changes_parts.size() > 0:
 		display_text += "\n[" + ", ".join(changes_parts) + "]"
 
@@ -1301,6 +1320,7 @@ func _on_tier3_choice_made(
 		"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
 		[event_id, prev_count + 1]
 	)
+	_occurrence_counts_dirty = true
 
 	# --- 11. Update actor last_mentioned ---
 	for actor_key in cast_actors:
@@ -1544,16 +1564,14 @@ func _on_tier4_choice_made(
 	var display_text: String = "You chose: " + choice_text + "\n\n" + resolved_outcome
 
 	var changes_parts: Array = []
+	var current_pop: float = float(stats.get("population", 1))
 	for stat_id in all_deltas:
 		var d: float = all_deltas[stat_id]
 		if absf(d) < 0.01:
 			continue
-		var sdef: Dictionary = _stat_defs.get(stat_id, {})
-		var stat_name: String = str(sdef.get("display_name", stat_id))
-		if d > 0:
-			changes_parts.append(stat_name + " +" + str(int(d)))
-		else:
-			changes_parts.append(stat_name + " " + str(int(d)))
+		var formatted := _format_stat_delta(stat_id, d, current_pop)
+		if formatted != "":
+			changes_parts.append(formatted)
 	if changes_parts.size() > 0:
 		display_text += "\n[" + ", ".join(changes_parts) + "]"
 
@@ -1620,6 +1638,7 @@ func _on_tier4_choice_made(
 		"INSERT OR REPLACE INTO event_occurrence_counts (event_id, count) VALUES (?, ?);",
 		[event_id, prev_count + 1]
 	)
+	_occurrence_counts_dirty = true
 
 	# --- 11. Update actor last_mentioned ---
 	for actor_key in cast_actors:
@@ -1921,16 +1940,14 @@ func _on_chain_stage_choice_made(
 
 	# Stat change summary
 	var changes_parts: Array = []
+	var current_pop: float = float(stats.get("population", 1))
 	for stat_id in all_deltas:
 		var d: float = all_deltas[stat_id]
 		if absf(d) < 0.01:
 			continue
-		var sdef: Dictionary = _stat_defs.get(stat_id, {})
-		var stat_name: String = str(sdef.get("display_name", stat_id))
-		if d > 0:
-			changes_parts.append(stat_name + " +" + str(int(d)))
-		else:
-			changes_parts.append(stat_name + " " + str(int(d)))
+		var formatted := _format_stat_delta(stat_id, d, current_pop)
+		if formatted != "":
+			changes_parts.append(formatted)
 	if changes_parts.size() > 0:
 		display_text += "\n[" + ", ".join(changes_parts) + "]"
 
@@ -1994,56 +2011,78 @@ func _on_chain_stage_choice_made(
 
 
 func _maybe_generate_stat_warning(game_day: int, stats: Dictionary) -> void:
-	# ~10% chance per day of a stat-based warning when something is low
-	if randf() > 0.10:
-		return
+	var warnings_to_check := [
+		{"stat": "food_weeks", "threshold": 2.0, "cooldown_key": "warn_food",
+		 "text": "The food stores are getting dangerously thin. People are starting to notice."},
+		{"stat": "food_weeks", "threshold": 4.0, "cooldown_key": "warn_food_low",
+		 "text": "Food is running lower than anyone would like to admit."},
+		{"stat": "health", "threshold": 25.0, "cooldown_key": "warn_health_crit",
+		 "text": "Sickness is spreading. Without proper medicine, it will only get worse."},
+		{"stat": "health", "threshold": 40.0, "cooldown_key": "warn_health_low",
+		 "text": "Several people are complaining of aches and fevers."},
+		{"stat": "security", "threshold": 25.0, "cooldown_key": "warn_security_crit",
+		 "text": "The perimeter is barely watched. Anything could walk in."},
+		{"stat": "security", "threshold": 40.0, "cooldown_key": "warn_security_low",
+		 "text": "Strange noises at night. The guards are stretched too thin."},
+		{"stat": "morale", "threshold": 25.0, "cooldown_key": "warn_morale_crit",
+		 "text": "The mood in camp is bleak. Arguments break out over nothing."},
+		{"stat": "morale", "threshold": 40.0, "cooldown_key": "warn_morale_low",
+		 "text": "People are quieter than usual. The weight of it all is showing."},
+		{"stat": "cohesion", "threshold": 25.0, "cooldown_key": "warn_cohesion_crit",
+		 "text": "Factions are forming. People eat in separate groups now."},
+		{"stat": "cohesion", "threshold": 40.0, "cooldown_key": "warn_cohesion_low",
+		 "text": "Small disagreements linger longer than they should."},
+		{"stat": "resources", "threshold": 25.0, "cooldown_key": "warn_resources_crit",
+		 "text": "Supplies are critically low. Essential tools are beginning to fail."},
+		{"stat": "resources", "threshold": 40.0, "cooldown_key": "warn_resources_low",
+		 "text": "The supply shed is looking emptier every day."},
+	]
 
-	var warnings: Array = []
+	for check in warnings_to_check:
+		var stat_id: String = check["stat"]
+		var threshold: float = check["threshold"]
+		var cooldown_key: String = check["cooldown_key"]
+		var text: String = check["text"]
 
-	var food_val: float = float(stats.get("food", 0))
-	var pop_val: float = float(stats.get("population", 1))
-	var food_drain: float = GameData.get_config("FOOD_DRAIN_PER_PERSON")
-	var food_weeks: float = 0.0
-	if pop_val > 0 and food_drain > 0:
-		food_weeks = food_val / (pop_val * food_drain * 7.0)
-	if food_weeks < 2.0:
-		warnings.append("The food stores are getting dangerously thin. People are starting to notice.")
-	elif food_weeks < 4.0:
-		warnings.append("Food is running lower than anyone would like to admit.")
+		# Check cooldown — only fire once per 14 days
+		var last_fired: int = _warning_cooldowns.get(cooldown_key, -999)
+		if game_day - last_fired < 14:
+			continue
 
-	var health: float = float(stats.get("health", 50))
-	if health < 25:
-		warnings.append("Sickness is spreading. Without proper medicine, it will only get worse.")
-	elif health < 40:
-		warnings.append("Several people are complaining of aches and fevers.")
+		# Check condition
+		var current_val: float
+		if stat_id == "food_weeks":
+			var pop := maxf(float(stats.get("population", 1)), 1.0)
+			var fd := GameData.get_config("FOOD_DRAIN_PER_PERSON")
+			current_val = float(stats.get("food", 0)) / pop / maxf(fd, 0.01) / 7.0
+		else:
+			current_val = float(stats.get(stat_id, 100.0))
 
-	var security: float = float(stats.get("security", 50))
-	if security < 25:
-		warnings.append("The perimeter is barely watched. Anything could walk in.")
-	elif security < 40:
-		warnings.append("Strange noises at night. The guards are stretched too thin.")
+		if current_val < threshold:
+			_write_log_entry(game_day, 1, "warning", text)
+			_warning_cooldowns[cooldown_key] = game_day
+			break  # Only one warning per tick
 
-	var morale: float = float(stats.get("morale", 50))
-	if morale < 25:
-		warnings.append("The mood in camp is bleak. Arguments break out over nothing.")
-	elif morale < 40:
-		warnings.append("People are quieter than usual. The weight of it all is showing.")
 
-	var cohesion: float = float(stats.get("cohesion", 50))
-	if cohesion < 25:
-		warnings.append("Factions are forming. People eat in separate groups now.")
-	elif cohesion < 40:
-		warnings.append("Small disagreements linger longer than they should.")
+func _format_stat_delta(stat_id: String, delta: float, current_population: float) -> String:
+	var sdef: Dictionary = _stat_defs.get(stat_id, {})
+	var stat_name: String = str(sdef.get("display_name", stat_id))
+	var fmt: String = str(sdef.get("format_type", "bar"))
 
-	var resources: float = float(stats.get("resources", 50))
-	if resources < 25:
-		warnings.append("Tools are breaking faster than they can be repaired. Supplies are critical.")
-	elif resources < 40:
-		warnings.append("The supply shed is looking emptier every day.")
+	var display_val: String
+	if fmt == "weeks" or stat_id == "food":
+		var food_drain: float = GameData.get_config("FOOD_DRAIN_PER_PERSON")
+		var pop := maxf(current_population, 1.0)
+		var weeks_delta: float = delta / (pop * food_drain * 7.0)
+		if absf(weeks_delta) < 0.05:
+			return ""
+		display_val = "%.1f wks" % weeks_delta
+	else:
+		if absf(delta) < 0.5:
+			return ""
+		display_val = "%+d" % int(delta)
 
-	if warnings.size() > 0:
-		var warning_text: String = warnings[randi() % warnings.size()]
-		_write_log_entry(game_day, 2, "warning", warning_text)
+	return stat_name + " " + display_val
 
 
 # ---------- Helper Methods ----------
@@ -2327,10 +2366,14 @@ func _load_cooldowns() -> Array:
 
 
 func _load_occurrence_counts() -> Dictionary:
+	if not _occurrence_counts_dirty:
+		return _current_occurrence_counts
 	var rows := DatabaseManager.query_save("SELECT event_id, count FROM event_occurrence_counts")
 	var result := {}
 	for row in rows:
 		result[row["event_id"]] = row["count"]
+	_current_occurrence_counts = result
+	_occurrence_counts_dirty = false
 	return result
 
 

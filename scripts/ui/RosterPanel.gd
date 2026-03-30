@@ -28,11 +28,15 @@ func _ready() -> void:
 
 	_close_button.pressed.connect(_on_close_button_pressed)
 
+	# Ensure scroll container has minimum height
+	var scroll: ScrollContainer = $VBoxContainer/ScrollContainer
+	scroll.custom_minimum_size.y = 300
+
 
 func refresh() -> void:
-	# Clear existing rows
+	# Free immediately, not deferred
 	for child in _member_list.get_children():
-		child.queue_free()
+		child.free()
 
 	_warning_label.text = ""
 

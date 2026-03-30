@@ -77,8 +77,9 @@ func _ready() -> void:
 
 	# Chart container
 	_chart_container = Control.new()
-	_chart_container.custom_minimum_size.y = 180
+	_chart_container.custom_minimum_size.y = 280
 	_chart_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chart_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_chart_container)
 
 	# Separator before derived values
